@@ -22,11 +22,11 @@ var majorSuffixRe = regexp.MustCompile(`((?:/|\.)(v(?:[2-9]|[1-9]\d+)))$`)
 
 // ModuleInfo holds information about a module and any discovered major update.
 type ModuleInfo struct {
-	// Current is the module path as it appears in go.mod (e.g. github.com/gofiber/fiber/v2).
+	// Current is the module path as it appears in go.mod (e.g. github.com/user/gomodule/v2).
 	Current string
 	// CurrentVersion is the semver version currently required (e.g. v2.50.0).
 	CurrentVersion string
-	// BasePath is the module path without the major-version suffix (e.g. github.com/gofiber/fiber).
+	// BasePath is the module path without the major-version suffix (e.g. github.com/user/gomodule).
 	BasePath string
 	// CurrentMajor is the currently used major version number (1 for unversioned, 2+ otherwise).
 	CurrentMajor int
@@ -47,7 +47,7 @@ var httpClient = &http.Client{Timeout: 10 * time.Second}
 //
 // Examples:
 //
-//	"github.com/gofiber/fiber/v2"  -> ("github.com/gofiber/fiber", 2)
+//	"github.com/user/gomodule/v2"  -> ("github.com/user/gomodule", 2)
 //	"gopkg.in/yaml.v2"             -> ("gopkg.in/yaml", 2)
 //	"github.com/google/uuid"       -> ("github.com/google/uuid", 1)
 func ParseModulePath(modPath string) (basePath string, major int) {
