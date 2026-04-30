@@ -61,11 +61,11 @@ func TestResolveModFile_ErrorWhenMissing(t *testing.T) {
 
 func TestRootCmd_DefaultFlags(t *testing.T) {
 	// maxProbe default is 5, checkAll default is false.
-	if maxProbe != 5 {
-		t.Errorf("default maxProbe = %d, want 5", maxProbe)
+	if config.MaxProbe != 5 {
+		t.Errorf("default MaxProbe = %d, want 5", config.MaxProbe)
 	}
-	if checkAll {
-		t.Errorf("default checkAll = true, want false")
+	if config.CheckAll {
+		t.Errorf("default CheckAll = true, want false")
 	}
 }
 
@@ -89,38 +89,36 @@ go 1.21
 require github.com/google/uuid v1.6.0 // indirect
 `
 	p := writeModFile(t, dir, content)
-	modFilePath = p
-	checkAll = false
-	maxProbe = 0 // no network probing
+	testConfig := &Config{
+		ModFilePath: p,
+		CheckAll:    false,
+		MaxProbe:    0, // no network probing
+		Client:      checker.DefaultClient(),
+	}
 
 	// runChecker must not panic; we just verify it returns without crashing.
 	// (Output goes to stdout which is harmless in tests.)
-	defer func() {
-		modFilePath = ""
-		checkAll = false
-		maxProbe = 5
-	}()
-
-	// We can't call runChecker(true) directly in a test because it calls os.Exit
-	// on errors, but with a valid file and fileExplicit=true it should run cleanly.
-	runChecker(true)
+	err := runCheckerWithConfig(testConfig, true)
+	if err != nil {
+		t.Errorf("runCheckerWithConfig returned unexpected error: %v", err)
+	}
 }
 
 func TestRunChecker_EmptyMod(t *testing.T) {
 	dir := t.TempDir()
 	content := "module example.com/empty\n\ngo 1.21\n"
 	p := writeModFile(t, dir, content)
-	modFilePath = p
-	checkAll = false
-	maxProbe = 0
+	testConfig := &Config{
+		ModFilePath: p,
+		CheckAll:    false,
+		MaxProbe:    0,
+		Client:      checker.DefaultClient(),
+	}
 
-	defer func() {
-		modFilePath = ""
-		checkAll = false
-		maxProbe = 5
-	}()
-
-	runChecker(true)
+	err := runCheckerWithConfig(testConfig, true)
+	if err != nil {
+		t.Errorf("runCheckerWithConfig returned unexpected error: %v", err)
+	}
 }
 
 func TestRunChecker_WithUpdatesMock(t *testing.T) {
@@ -142,21 +140,20 @@ require github.com/foo/bar v1.0.0
 	}))
 	defer server.Close()
 
-	originalProxyBase := checker.ProxyBase
-	checker.ProxyBase = server.URL
-	defer func() { checker.ProxyBase = originalProxyBase }()
+	testConfig := &Config{
+		ModFilePath: p,
+		CheckAll:    false,
+		MaxProbe:    2,
+		Client: &checker.Client{
+			HTTPClient: server.Client(),
+			ProxyBase:  server.URL,
+		},
+	}
 
-	modFilePath = p
-	checkAll = false
-	maxProbe = 2
-
-	defer func() {
-		modFilePath = ""
-		checkAll = false
-		maxProbe = 5
-	}()
-
-	runChecker(true)
+	err := runCheckerWithConfig(testConfig, true)
+	if err != nil {
+		t.Errorf("runCheckerWithConfig returned unexpected error: %v", err)
+	}
 }
 
 func TestRunChecker_AllDeps(t *testing.T) {
@@ -177,21 +174,20 @@ require (
 	}))
 	defer server.Close()
 
-	originalProxyBase := checker.ProxyBase
-	checker.ProxyBase = server.URL
-	defer func() { checker.ProxyBase = originalProxyBase }()
+	testConfig := &Config{
+		ModFilePath: p,
+		CheckAll:    true,
+		MaxProbe:    1,
+		Client: &checker.Client{
+			HTTPClient: server.Client(),
+			ProxyBase:  server.URL,
+		},
+	}
 
-	modFilePath = p
-	checkAll = true
-	maxProbe = 1
-
-	defer func() {
-		modFilePath = ""
-		checkAll = false
-		maxProbe = 5
-	}()
-
-	runChecker(true)
+	err := runCheckerWithConfig(testConfig, true)
+	if err != nil {
+		t.Errorf("runCheckerWithConfig returned unexpected error: %v", err)
+	}
 }
 
 func TestExecute(t *testing.T) {
