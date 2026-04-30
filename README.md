@@ -49,3 +49,26 @@ You can run the tool in any directory containing a `go.mod` file:
 ```bash
 ./gomajor -m 10
 ```
+
+## Development
+
+### Running Tests
+
+The project includes comprehensive unit tests for both the checker and cmd packages:
+
+```bash
+# Run all tests
+go test ./...
+
+# Run tests with coverage
+go test -cover ./...
+
+# Run tests for a specific package
+go test ./checker
+go test ./cmd
+```
+
+### Architecture
+
+- **checker**: Core logic for detecting major version updates by querying the Go Module Proxy. The `Client` struct encapsulates HTTP operations and can be configured with custom HTTP clients and proxy URLs.
+- **cmd**: CLI interface built with Cobra. Uses a `Config` struct for dependency injection, making it easy to test without relying on global state.

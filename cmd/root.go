@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,11 +12,25 @@ import (
 	"golang.org/x/mod/modfile"
 )
 
-var (
-	modFilePath string
-	maxProbe    int
-	checkAll    bool
-)
+// Config holds the configuration for the checker command.
+type Config struct {
+	ModFilePath string
+	MaxProbe    int
+	CheckAll    bool
+	Client      *checker.Client
+}
+
+// DefaultConfig returns a config with standard settings.
+func DefaultConfig() *Config {
+	return &Config{
+		ModFilePath: "",
+		MaxProbe:    5,
+		CheckAll:    false,
+		Client:      checker.DefaultClient(),
+	}
+}
+
+var config = DefaultConfig()
 
 var rootCmd = &cobra.Command{
 	Use:   "gomajor",
@@ -36,9 +51,9 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.Flags().StringVarP(&modFilePath, "file", "f", "", "Path to the go.mod file (default: auto-detect in current directory or binary directory)")
-	rootCmd.Flags().IntVarP(&maxProbe, "max-probe", "m", 5, "Maximum number of subsequent major versions to probe for")
-	rootCmd.Flags().BoolVarP(&checkAll, "all", "a", false, "Check all dependencies, including indirect ones (by default only direct dependencies are checked)")
+	rootCmd.Flags().StringVarP(&config.ModFilePath, "file", "f", "", "Path to the go.mod file (default: auto-detect in current directory or binary directory)")
+	rootCmd.Flags().IntVarP(&config.MaxProbe, "max-probe", "m", 5, "Maximum number of subsequent major versions to probe for")
+	rootCmd.Flags().BoolVarP(&config.CheckAll, "all", "a", false, "Check all dependencies, including indirect ones (by default only direct dependencies are checked)")
 }
 
 // resolveModFile returns the path to use for go.mod, auto-discovering it when
@@ -68,32 +83,36 @@ func resolveModFile() (string, error) {
 }
 
 func runChecker(fileExplicit bool) {
+	if err := runCheckerWithConfig(config, fileExplicit); err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		os.Exit(1)
+	}
+}
+
+func runCheckerWithConfig(cfg *Config, fileExplicit bool) error {
 	// Resolve the path to go.mod.
-	path := modFilePath
+	path := cfg.ModFilePath
 	if !fileExplicit {
 		resolved, err := resolveModFile()
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "Error:", err)
-			os.Exit(1)
+			return err
 		}
 		path = resolved
 	}
 
 	content, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading file %s: %v\n", path, err)
-		os.Exit(1)
+		return fmt.Errorf("reading file %s: %w", path, err)
 	}
 
 	modFile, err := modfile.Parse(path, content, nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing %s: %v\n", path, err)
-		os.Exit(1)
+		return fmt.Errorf("parsing %s: %w", path, err)
 	}
 
 	var reqs []*modfile.Require
 	for _, req := range modFile.Require {
-		if !checkAll && req.Indirect {
+		if !cfg.CheckAll && req.Indirect {
 			continue
 		}
 		reqs = append(reqs, req)
@@ -101,14 +120,10 @@ func runChecker(fileExplicit bool) {
 
 	if len(reqs) == 0 {
 		fmt.Println("No matching dependencies found in", path)
-		return
+		return nil
 	}
 
-	if checkAll {
-		fmt.Printf("Analyzing %d dependencies (direct and indirect) from %s...\n\n", len(reqs), path)
-	} else {
-		fmt.Printf("Analyzing %d direct dependencies from %s...\n\n", len(reqs), path)
-	}
+	printAnalysisHeader(len(reqs), cfg.CheckAll, path)
 
 	var wg sync.WaitGroup
 	results := make(chan checker.ModuleInfo, len(reqs))
@@ -117,7 +132,7 @@ func runChecker(fileExplicit bool) {
 		wg.Add(1)
 		go func(modPath, version string) {
 			defer wg.Done()
-			info := checker.Check(modPath, version, maxProbe)
+			info := cfg.Client.Check(context.Background(), modPath, version, cfg.MaxProbe)
 			results <- info
 		}(req.Mod.Path, req.Mod.Version)
 	}
@@ -127,8 +142,27 @@ func runChecker(fileExplicit bool) {
 		close(results)
 	}()
 
-	var hasUpdates bool
+	hasUpdates := printResults(results)
 
+	if !hasUpdates {
+		fmt.Println("All checked dependencies are on their latest major versions.")
+	}
+	return nil
+}
+
+// printAnalysisHeader prints the header showing what dependencies are being analyzed.
+func printAnalysisHeader(count int, checkAll bool, path string) {
+	if checkAll {
+		fmt.Printf("Analyzing %d dependencies (direct and indirect) from %s...\n\n", count, path)
+	} else {
+		fmt.Printf("Analyzing %d direct dependencies from %s...\n\n", count, path)
+	}
+}
+
+// printResults processes the results channel and prints available updates.
+// Returns true if any updates were found.
+func printResults(results <-chan checker.ModuleInfo) bool {
+	var hasUpdates bool
 	for info := range results {
 		if info.HasUpdate {
 			hasUpdates = true
@@ -139,8 +173,5 @@ func runChecker(fileExplicit bool) {
 				info.LatestMajorPath)
 		}
 	}
-
-	if !hasUpdates {
-		fmt.Println("All checked dependencies are on their latest major versions.")
-	}
+	return hasUpdates
 }

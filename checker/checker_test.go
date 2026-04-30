@@ -1,6 +1,7 @@
 package checker
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -101,12 +102,12 @@ func TestCheck(t *testing.T) {
 	// Close the server when test finishes
 	defer server.Close()
 
-	// Override ProxyBase
-	originalProxyBase := ProxyBase
-	ProxyBase = server.URL
-	defer func() { ProxyBase = originalProxyBase }()
+	client := &Client{
+		HTTPClient: server.Client(),
+		ProxyBase:  server.URL,
+	}
 
-	info := Check("github.com/foo/bar/v2", "v2.0.0", 5)
+	info := client.Check(context.Background(), "github.com/foo/bar/v2", "v2.0.0", 5)
 
 	if !info.HasUpdate {
 		t.Errorf("Expected HasUpdate to be true, got false")
@@ -132,15 +133,16 @@ func TestLatestVersion_Error(t *testing.T) {
 	}))
 	defer server.Close()
 
-	originalProxyBase := ProxyBase
-	ProxyBase = server.URL
-	defer func() { ProxyBase = originalProxyBase }()
+	client := &Client{
+		HTTPClient: server.Client(),
+		ProxyBase:  server.URL,
+	}
 
-	if _, ok := latestVersion("github.com/nonexistent"); ok {
+	if _, ok := client.latestVersion(context.Background(), "github.com/nonexistent"); ok {
 		t.Errorf("Expected latestVersion to fail on 500")
 	}
 
-	if _, ok := latestVersion("badjson"); ok {
+	if _, ok := client.latestVersion(context.Background(), "badjson"); ok {
 		t.Errorf("Expected latestVersion to fail on bad json")
 	}
 }
@@ -155,11 +157,12 @@ func TestFindLatestMajor_CurrentMajor1(t *testing.T) {
 	}))
 	defer server.Close()
 
-	originalProxyBase := ProxyBase
-	ProxyBase = server.URL
-	defer func() { ProxyBase = originalProxyBase }()
+	client := &Client{
+		HTTPClient: server.Client(),
+		ProxyBase:  server.URL,
+	}
 
-	major, path, ver := FindLatestMajor("github.com/foo/bar", 1, 5)
+	major, path, ver := client.FindLatestMajor(context.Background(), "github.com/foo/bar", 1, 5)
 	if major != 2 {
 		t.Errorf("Expected major 2, got %d", major)
 	}

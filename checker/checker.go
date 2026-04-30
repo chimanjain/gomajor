@@ -3,18 +3,36 @@
 package checker
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"path"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
 
-var ProxyBase = "https://proxy.golang.org"
+// Client handles HTTP requests to the Go module proxy.
+type Client struct {
+	HTTPClient *http.Client
+	ProxyBase  string
+}
+
+// DefaultClient returns a client with standard settings.
+func DefaultClient() *Client {
+	return &Client{
+		HTTPClient: &http.Client{Timeout: 10 * time.Second},
+		ProxyBase:  "https://proxy.golang.org",
+	}
+}
+
+var defaultClient = DefaultClient()
+
+// ProxyBase is deprecated; use Client.ProxyBase instead.
+// Kept for backward compatibility with tests.
+var ProxyBase = defaultClient.ProxyBase
 
 // majorSuffixRe matches a trailing major-version segment in a module path.
 // Handles both "/vN" (GitHub style) and ".vN" (gopkg.in style).
@@ -39,9 +57,6 @@ type ModuleInfo struct {
 	// HasUpdate is true when LatestMajor > CurrentMajor.
 	HasUpdate bool
 }
-
-// httpClient is a shared client with a reasonable timeout.
-var httpClient = &http.Client{Timeout: 10 * time.Second}
 
 // ParseModulePath splits a module path into its base path and current major version number.
 //
@@ -78,14 +93,17 @@ func nextMajorPath(basePath string, major int) string {
 
 // latestVersion returns the latest released version for a module path from the
 // Go proxy. Returns ("", false) if nothing is found or an error occurs.
-func latestVersion(modPath string) (string, bool) {
-	// Use the /@latest endpoint which returns the latest tagged version.
+func (c *Client) latestVersion(ctx context.Context, modPath string) (string, bool) {
 	escaped, err := escapePath(modPath)
 	if err != nil {
 		return "", false
 	}
-	url := fmt.Sprintf("%s/%s/@latest", ProxyBase, escaped)
-	resp, err := httpClient.Get(url)
+	url := fmt.Sprintf("%s/%s/@latest", c.ProxyBase, escaped)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", false
+	}
+	resp, err := c.HTTPClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return "", false
 	}
@@ -122,14 +140,13 @@ func escapePath(modPath string) (string, error) {
 	if sb.Len() == 0 {
 		return "", fmt.Errorf("empty module path")
 	}
-	_ = path.Clean // just to ensure path is imported if needed later
 	return sb.String(), nil
 }
 
 // FindLatestMajor probes the Go proxy for higher major versions beyond currentMajor,
 // up to a configurable ceiling. It returns the highest major version found and
 // the module path for it.
-func FindLatestMajor(basePath string, currentMajor int, maxProbe int) (latestMajor int, latestPath string, latestVer string) {
+func (c *Client) FindLatestMajor(ctx context.Context, basePath string, currentMajor int, maxProbe int) (latestMajor int, latestPath string, latestVer string) {
 	latestMajor = currentMajor
 	latestPath = nextMajorPath(basePath, currentMajor)
 	if currentMajor == 1 {
@@ -138,7 +155,7 @@ func FindLatestMajor(basePath string, currentMajor int, maxProbe int) (latestMaj
 
 	for candidate := currentMajor + 1; candidate <= currentMajor+maxProbe; candidate++ {
 		candidatePath := nextMajorPath(basePath, candidate)
-		ver, ok := latestVersion(candidatePath)
+		ver, ok := c.latestVersion(ctx, candidatePath)
 		if !ok {
 			// Stop probing once we hit a gap.
 			break
@@ -151,7 +168,7 @@ func FindLatestMajor(basePath string, currentMajor int, maxProbe int) (latestMaj
 }
 
 // Check analyses a single module (path + version from go.mod) and returns a ModuleInfo.
-func Check(modPath, modVersion string, maxProbe int) ModuleInfo {
+func (c *Client) Check(ctx context.Context, modPath, modVersion string, maxProbe int) ModuleInfo {
 	basePath, currentMajor := ParseModulePath(modPath)
 	info := ModuleInfo{
 		Current:        modPath,
@@ -160,10 +177,15 @@ func Check(modPath, modVersion string, maxProbe int) ModuleInfo {
 		CurrentMajor:   currentMajor,
 	}
 
-	latestMajor, latestPath, latestVer := FindLatestMajor(basePath, currentMajor, maxProbe)
+	latestMajor, latestPath, latestVer := c.FindLatestMajor(ctx, basePath, currentMajor, maxProbe)
 	info.LatestMajor = latestMajor
 	info.LatestMajorPath = latestPath
 	info.LatestMajorVersion = latestVer
 	info.HasUpdate = latestMajor > currentMajor
 	return info
+}
+
+// Check is a convenience function that uses the default client.
+func Check(modPath, modVersion string, maxProbe int) ModuleInfo {
+	return defaultClient.Check(context.Background(), modPath, modVersion, maxProbe)
 }
