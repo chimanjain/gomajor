@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 )
 
@@ -172,4 +173,42 @@ func TestFindLatestMajor_CurrentMajor1(t *testing.T) {
 	if ver != "v2.0.0" {
 		t.Errorf("Expected version v2.0.0, got %s", ver)
 	}
+}
+
+func TestDefaultClient(t *testing.T) {
+	t.Run("Default", func(t *testing.T) {
+		os.Setenv("GOPROXY", "")
+		defer os.Unsetenv("GOPROXY")
+		c := DefaultClient()
+		if c.ProxyBase != "https://proxy.golang.org" {
+			t.Errorf("Expected https://proxy.golang.org, got %s", c.ProxyBase)
+		}
+	})
+
+	t.Run("Custom", func(t *testing.T) {
+		os.Setenv("GOPROXY", "https://myproxy.com")
+		defer os.Unsetenv("GOPROXY")
+		c := DefaultClient()
+		if c.ProxyBase != "https://myproxy.com" {
+			t.Errorf("Expected https://myproxy.com, got %s", c.ProxyBase)
+		}
+	})
+
+	t.Run("List", func(t *testing.T) {
+		os.Setenv("GOPROXY", "https://proxy1.com,https://proxy2.com,direct")
+		defer os.Unsetenv("GOPROXY")
+		c := DefaultClient()
+		if c.ProxyBase != "https://proxy1.com" {
+			t.Errorf("Expected https://proxy1.com, got %s", c.ProxyBase)
+		}
+	})
+
+	t.Run("DirectOrOff", func(t *testing.T) {
+		os.Setenv("GOPROXY", "direct")
+		defer os.Unsetenv("GOPROXY")
+		c := DefaultClient()
+		if c.ProxyBase != "https://proxy.golang.org" {
+			t.Errorf("Expected default proxy when direct, got %s", c.ProxyBase)
+		}
+	})
 }
