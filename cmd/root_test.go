@@ -201,3 +201,43 @@ func TestExecute(t *testing.T) {
 	// Execute calls rootCmd.Execute() which calls runChecker.
 	Execute()
 }
+
+func TestRunChecker_Json(t *testing.T) {
+	dir := t.TempDir()
+	content := `module example.com/test
+require github.com/foo/bar v1.0.0
+`
+	p := writeModFile(t, dir, content)
+
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
+			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
+		} else {
+			rw.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	testConfig := &Config{
+		ModFilePath: p,
+		MaxProbe:    2,
+		JsonOutput:  true,
+		Client: &checker.Client{
+			HTTPClient: server.Client(),
+			ProxyBase:  server.URL,
+		},
+	}
+
+	err := runCheckerWithConfig(testConfig, true)
+	if err != nil {
+		t.Errorf("runCheckerWithConfig returned unexpected error: %v", err)
+	}
+	// We just ensure it doesn't fail. Capturing stdout to verify JSON structure 
+	// could be done but is a bit more involved.
+}
+
+func TestRootCmd_NoColorFlag(t *testing.T) {
+	if config.NoColor {
+		t.Errorf("default NoColor = true, want false")
+	}
+}

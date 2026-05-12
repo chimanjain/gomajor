@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -22,9 +23,22 @@ type Client struct {
 
 // DefaultClient returns a client with standard settings.
 func DefaultClient() *Client {
+	proxy := os.Getenv("GOPROXY")
+	if proxy == "" {
+		proxy = "https://proxy.golang.org"
+	}
+	// Take the first proxy in the list (e.g. "proxy1,proxy2,direct")
+	if idx := strings.Index(proxy, ","); idx != -1 {
+		proxy = proxy[:idx]
+	}
+	// If it's "direct" or "off", default to the standard proxy for this tool's purposes
+	if proxy == "direct" || proxy == "off" {
+		proxy = "https://proxy.golang.org"
+	}
+
 	return &Client{
 		HTTPClient: &http.Client{Timeout: 10 * time.Second},
-		ProxyBase:  "https://proxy.golang.org",
+		ProxyBase:  strings.TrimRight(proxy, "/"),
 	}
 }
 

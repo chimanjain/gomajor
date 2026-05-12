@@ -2,7 +2,7 @@
 
 A command-line tool that parses your `go.mod` file to proactively discover **major version upgrades** for your Go dependencies.
 
-Standard Go commands (like `go list -m -u all`) often won't highlight new major version updates because Go considers different major versions (e.g., `github.com/user/gomodule/v2` vs `github.com/user/gomodule/v3`) as entirely different module paths. This tool bridges that gap by intelligently querying the Go Module Proxy (`proxy.golang.org`) to see if a higher major version exists.
+Standard Go commands (like `go list -m -u all`) often won't highlight new major version updates because Go considers different major versions (e.g., `github.com/user/gomodule/v2` vs `github.com/user/gomodule/v3`) as entirely different module paths. This tool bridges that gap by intelligently querying your Go Module Proxy (respecting `GOPROXY`) to see if a higher major version exists.
 
 ## How to Build
 
@@ -32,6 +32,14 @@ You can run the tool in any directory containing a `go.mod` file:
 | `--file` | `-f` | Provide a specific path to a `go.mod` file. If not provided, it will automatically search in your current working directory, and then the directory of the tool's executable. | `""` (auto-detect) |
 | `--all` | `-a` | Check all dependencies, including indirect ones (marked with `// indirect` in `go.mod`). By default, only direct dependencies are analyzed. | `false` |
 | `--max-probe` | `-m` | The maximum number of subsequent major versions to probe for when querying the Go proxy (e.g., if you are on `v2`, it will check up to `v7` if set to `5`). | `5` |
+| `--json` | | Output the results in JSON format for easier automation and piping. | `false` |
+| `--no-color` | | Disable colorized output. Useful for CI/CD logs or plain text environments. | `false` |
+
+### Environment Variables
+
+GoMajor respects the standard Go environment variables:
+
+- `GOPROXY`: Specifies the Go module proxy to use. If not set, it defaults to `https://proxy.golang.org`.
 
 ## Examples
 
