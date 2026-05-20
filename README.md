@@ -4,9 +4,21 @@ A command-line tool that parses your `go.mod` file to proactively discover **maj
 
 Standard Go commands (like `go list -m -u all`) often won't highlight new major version updates because Go considers different major versions (e.g., `github.com/user/gomodule/v2` vs `github.com/user/gomodule/v3`) as entirely different module paths. This tool bridges that gap by intelligently querying your Go Module Proxy (respecting `GOPROXY`) to see if a higher major version exists.
 
-## How to Build
+## Installation
 
-Clone this repository and compile the binary using `go build`:
+### Using `go install`
+
+Install the latest version of GoMajor directly:
+
+```bash
+go install github.com/chimanjain/gomajor@latest
+```
+
+Ensure your `GOBIN` or `GOPATH/bin` is in your system's `PATH`.
+
+### Building from Source
+
+Alternatively, clone the repository and compile the binary manually:
 
 ```bash
 # Clone the repository
@@ -19,7 +31,15 @@ go build -o gomajor
 
 ## Usage
 
-You can run the tool in any directory containing a `go.mod` file:
+You can run the tool in any directory containing a `go.mod` file.
+
+If you installed via `go install`, run:
+
+```bash
+gomajor
+```
+
+If you built from source, run the compiled binary:
 
 ```bash
 ./gomajor
