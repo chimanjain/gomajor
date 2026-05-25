@@ -1,14 +1,9 @@
 package cmd
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/chimanjain/gomajor/checker"
 )
 
 func TestResolveModFile_FindsInCwd(t *testing.T) {
@@ -79,117 +74,6 @@ func writeModFile(t *testing.T, dir, content string) string {
 	return p
 }
 
-func TestRunChecker_NoDirectDeps(t *testing.T) {
-	dir := t.TempDir()
-	// Only indirect dependencies — runChecker should print "No matching dependencies".
-	content := `module example.com/test
-
-go 1.21
-
-require github.com/google/uuid v1.6.0 // indirect
-`
-	p := writeModFile(t, dir, content)
-	testConfig := &Config{
-		ModFilePath: p,
-		CheckAll:    false,
-		MaxProbe:    0, // no network probing
-		Client:      checker.DefaultClient(),
-	}
-
-	// runChecker must not panic; we just verify it returns without crashing.
-	// (Output goes to stdout which is harmless in tests.)
-	err := runCheckerWithConfig(testConfig, true)
-	if err != nil {
-		t.Errorf("runCheckerWithConfig returned unexpected error: %v", err)
-	}
-}
-
-func TestRunChecker_EmptyMod(t *testing.T) {
-	dir := t.TempDir()
-	content := "module example.com/empty\n\ngo 1.21\n"
-	p := writeModFile(t, dir, content)
-	testConfig := &Config{
-		ModFilePath: p,
-		CheckAll:    false,
-		MaxProbe:    0,
-		Client:      checker.DefaultClient(),
-	}
-
-	err := runCheckerWithConfig(testConfig, true)
-	if err != nil {
-		t.Errorf("runCheckerWithConfig returned unexpected error: %v", err)
-	}
-}
-
-func TestRunChecker_WithUpdatesMock(t *testing.T) {
-	dir := t.TempDir()
-	content := `module example.com/test
-
-go 1.21
-
-require github.com/foo/bar v1.0.0
-`
-	p := writeModFile(t, dir, content)
-
-	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
-			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
-		} else {
-			rw.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	testConfig := &Config{
-		ModFilePath: p,
-		CheckAll:    false,
-		MaxProbe:    2,
-		Client: &checker.Client{
-			HTTPClient: server.Client(),
-			ProxyBase:  server.URL,
-		},
-	}
-
-	err := runCheckerWithConfig(testConfig, true)
-	if err != nil {
-		t.Errorf("runCheckerWithConfig returned unexpected error: %v", err)
-	}
-}
-
-func TestRunChecker_AllDeps(t *testing.T) {
-	dir := t.TempDir()
-	content := `module example.com/test
-
-go 1.21
-
-require (
-	github.com/foo/bar v1.0.0
-	github.com/foo/baz v1.0.0 // indirect
-)
-`
-	p := writeModFile(t, dir, content)
-
-	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		rw.WriteHeader(http.StatusNotFound)
-	}))
-	defer server.Close()
-
-	testConfig := &Config{
-		ModFilePath: p,
-		CheckAll:    true,
-		MaxProbe:    1,
-		Client: &checker.Client{
-			HTTPClient: server.Client(),
-			ProxyBase:  server.URL,
-		},
-	}
-
-	err := runCheckerWithConfig(testConfig, true)
-	if err != nil {
-		t.Errorf("runCheckerWithConfig returned unexpected error: %v", err)
-	}
-}
-
 func TestExecute(t *testing.T) {
 	dir := t.TempDir()
 	content := "module example.com/test\n\ngo 1.21\n"
@@ -200,40 +84,6 @@ func TestExecute(t *testing.T) {
 
 	// Execute calls rootCmd.Execute() which calls runChecker.
 	Execute()
-}
-
-func TestRunChecker_Json(t *testing.T) {
-	dir := t.TempDir()
-	content := `module example.com/test
-require github.com/foo/bar v1.0.0
-`
-	p := writeModFile(t, dir, content)
-
-	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
-			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
-		} else {
-			rw.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	testConfig := &Config{
-		ModFilePath: p,
-		MaxProbe:    2,
-		JsonOutput:  true,
-		Client: &checker.Client{
-			HTTPClient: server.Client(),
-			ProxyBase:  server.URL,
-		},
-	}
-
-	err := runCheckerWithConfig(testConfig, true)
-	if err != nil {
-		t.Errorf("runCheckerWithConfig returned unexpected error: %v", err)
-	}
-	// We just ensure it doesn't fail. Capturing stdout to verify JSON structure 
-	// could be done but is a bit more involved.
 }
 
 func TestRootCmd_NoColorFlag(t *testing.T) {

@@ -1,0 +1,21 @@
+# GoMajor Remote GitHub Configuration Example
+#
+# This template demonstrates all supported formats for remote checking of Go modules
+# hosted directly on GitHub.
+
+github:
+  # 1. Shorthand notation (owner/repo)
+  # Automatically probes 'main' branch, followed by 'master' branch.
+  - "spf13/cobra"
+
+  # 2. Shorthand notation with domain (github.com/owner/repo)
+  # Also automatically probes 'main' branch, followed by 'master' branch.
+  - "github.com/go-gorm/gorm"
+
+  # 3. Full HTTP/HTTPS repository root URL
+  # Probes 'main' branch and 'master' branch raw file paths.
+  - "https://github.com/gin-gonic/gin"
+
+  # 4. Direct link to a go.mod file on a specific branch or commit
+  # Fetches the go.mod directly from the specified location.
+  - "https://github.com/google/uuid/blob/master/go.mod"

@@ -1,0 +1,14 @@
+# GoMajor Local Configuration Example
+#
+# This template demonstrates how to configure GoMajor to check only local go.mod files
+# across one or multiple Go projects.
+
+local:
+  # Absolute path to a local project
+  - "/home/user/workspace/project1/go.mod"
+
+  # Relative path to a local project relative to where the binary is executed
+  - "./go.mod"
+
+  # Nested microservices or sub-packages in the same repository
+  - "../another-project/go.mod"

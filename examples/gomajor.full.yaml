@@ -1,0 +1,21 @@
+# GoMajor Complete Configuration Example
+#
+# This template showcases a fully detailed configuration combining local project checking,
+# remote GitHub dependency tracking, and an automated report exporting destination.
+
+# Local go.mod files to analyze
+local:
+  - "/home/user/workspace/project1/go.mod"
+  - "./go.mod"
+
+# Remote GitHub repositories to analyze
+github:
+  - "spf13/cobra"
+  - "github.com/go-gorm/gorm"
+  - "https://github.com/gin-gonic/gin"
+  - "https://github.com/google/uuid/blob/master/go.mod"
+
+# Destination where the structured YAML report results should be saved.
+# Running GoMajor with this configuration will save results directly to this file
+# instead of printing them out to the standard output.
+output: "gomajor-report.yaml"

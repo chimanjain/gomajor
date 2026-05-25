@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/fatih/color v1.19.0
 	github.com/spf13/cobra v1.10.2
+	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/mod v0.36.0
 )
 
