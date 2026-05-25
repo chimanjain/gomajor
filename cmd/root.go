@@ -1,29 +1,14 @@
 package cmd
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
-	"text/tabwriter"
 
 	"github.com/chimanjain/gomajor/checker"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
-	"golang.org/x/mod/modfile"
 )
-
-// Config holds the configuration for the checker command.
-type Config struct {
-	ModFilePath string
-	MaxProbe    int
-	CheckAll    bool
-	JsonOutput  bool
-	NoColor     bool
-	Client      *checker.Client
-}
 
 // DefaultConfig returns a config with standard settings.
 func DefaultConfig() *Config {
@@ -34,6 +19,8 @@ func DefaultConfig() *Config {
 		JsonOutput:  false,
 		NoColor:     false,
 		Client:      checker.DefaultClient(),
+		ConfigPath:  "",
+		OutputPath:  "",
 	}
 }
 
@@ -49,7 +36,7 @@ available for your dependencies.`,
 		if config.NoColor {
 			color.NoColor = true
 		}
-		runChecker(cmd.Flags().Changed("file"))
+		runChecker(cmd.Flags().Changed("file"), cmd.Flags().Changed("config"), cmd.Flags().Changed("output"))
 	},
 }
 
@@ -66,6 +53,8 @@ func init() {
 	rootCmd.Flags().BoolVarP(&config.CheckAll, "all", "a", false, "Check all dependencies, including indirect ones (by default only direct dependencies are checked)")
 	rootCmd.Flags().BoolVar(&config.JsonOutput, "json", false, "Output results in JSON format")
 	rootCmd.Flags().BoolVar(&config.NoColor, "no-color", false, "Disable color output")
+	rootCmd.Flags().StringVarP(&config.ConfigPath, "config", "c", "", "Path to the YAML configuration file (default: auto-detects 'gomajor.yaml' in current directory)")
+	rootCmd.Flags().StringVarP(&config.OutputPath, "output", "o", "", "Path to save YAML results (defaults to 'gomajor-report.yaml' if outputting to a file, otherwise printed to terminal)")
 }
 
 // resolveModFile returns the path to use for go.mod, auto-discovering it when
@@ -92,131 +81,4 @@ func resolveModFile() (string, error) {
 	}
 
 	return "", fmt.Errorf("no go.mod found in current directory (%s) or binary directory; use --file to specify a path", cwd)
-}
-
-func runChecker(fileExplicit bool) {
-	if err := runCheckerWithConfig(config, fileExplicit); err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
-		os.Exit(1)
-	}
-}
-
-func runCheckerWithConfig(cfg *Config, fileExplicit bool) error {
-	// Resolve the path to go.mod.
-	path := cfg.ModFilePath
-	if !fileExplicit {
-		resolved, err := resolveModFile()
-		if err != nil {
-			return err
-		}
-		path = resolved
-	}
-
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("reading file %s: %w", path, err)
-	}
-
-	modFile, err := modfile.Parse(path, content, nil)
-	if err != nil {
-		return fmt.Errorf("parsing %s: %w", path, err)
-	}
-
-	var reqs []*modfile.Require
-	for _, req := range modFile.Require {
-		if !cfg.CheckAll && req.Indirect {
-			continue
-		}
-		reqs = append(reqs, req)
-	}
-
-	if len(reqs) == 0 {
-		if !cfg.JsonOutput {
-			fmt.Println("No matching dependencies found in", path)
-		} else {
-			fmt.Println("[]")
-		}
-		return nil
-	}
-
-	if !cfg.JsonOutput {
-		printAnalysisHeader(len(reqs), cfg.CheckAll, path)
-	}
-
-	var wg sync.WaitGroup
-	results := make(chan checker.ModuleInfo, len(reqs))
-
-	for _, req := range reqs {
-		wg.Add(1)
-		go func(modPath, version string) {
-			defer wg.Done()
-			info := cfg.Client.Check(context.Background(), modPath, version, cfg.MaxProbe)
-			results <- info
-		}(req.Mod.Path, req.Mod.Version)
-	}
-
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-
-	var allResults []checker.ModuleInfo
-	for info := range results {
-		allResults = append(allResults, info)
-	}
-
-	if cfg.JsonOutput {
-		return printJsonResults(allResults)
-	}
-
-	hasUpdates := printTextResults(allResults)
-	if !hasUpdates {
-		fmt.Println(color.GreenString("✔ All checked dependencies are on their latest major versions."))
-	}
-	return nil
-}
-
-func printJsonResults(results []checker.ModuleInfo) error {
-	data, err := json.MarshalIndent(results, "", "  ")
-	if err != nil {
-		return err
-	}
-	fmt.Println(string(data))
-	return nil
-}
-
-func printTextResults(results []checker.ModuleInfo) bool {
-	var hasUpdates bool
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	headerColor := color.New(color.Bold, color.Underline).SprintFunc()
-
-	first := true
-	for _, info := range results {
-		if info.HasUpdate {
-			if first {
-				fmt.Fprintln(w, headerColor("MODULE\tCURRENT\tLATEST\tNEW PATH"))
-				first = false
-			}
-			hasUpdates = true
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-				color.CyanString(info.BasePath),
-				info.CurrentVersion,
-				color.YellowString(info.LatestMajorVersion),
-				color.HiBlackString(info.LatestMajorPath))
-		}
-	}
-	w.Flush()
-	if hasUpdates {
-		fmt.Println()
-	}
-	return hasUpdates
-}
-
-// printAnalysisHeader prints the header showing what dependencies are being analyzed.
-func printAnalysisHeader(count int, checkAll bool, path string) {
-	msg := fmt.Sprintf("Analyzing %d direct dependencies", count)
-	if checkAll {
-		msg = fmt.Sprintf("Analyzing %d dependencies (direct and indirect)", count)
-	}
-	fmt.Printf("%s from %s...\n\n", color.HiCyanString(msg), color.HiBlackString(path))
 }
