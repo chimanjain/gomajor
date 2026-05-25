@@ -189,7 +189,7 @@ go test ./cmd
 - **checker**: Core logic for detecting major version updates by querying the Go Module Proxy. The `Client` struct encapsulates HTTP operations and can be configured with custom HTTP clients and proxy URLs.
 - **cmd**: CLI interface built with Cobra. Decoupled into modular cohesive components:
   - `types.go`: Defines configurations and output formats.
-  - `github.io`: Resolves and normalizes remote candidates.
+  - `github.go`: Resolves and normalizes remote candidates.
   - `runner.go`: Unifies concurrent checker flows.
   - `formatter.go`: Handles visual printouts.
   - `root.go`: Bootstraps CLI bindings.
