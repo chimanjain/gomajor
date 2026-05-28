@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [1.3.0] - 2026-05-28
+
+### Added
+
+- **Direct GitHub repository checking**: Introduced `--github` / `-g` command-line flags to check remote GitHub repositories directly from the CLI as a comma-separated list, bypassing the need for a YAML configuration file.
+- **In-memory proxy lookup caching**: Implemented thread-safe caching within `checker.Client` for Go Module Proxy queries. This bypasses redundant lookup requests for identical module paths in multi-source scans, accelerating execution times and minimizing remote network calls.
+- **Extensive test coverage**: Added rigorous unit tests in `cmd/runner_test.go` and `checker/checker_test.go` verifying proxy cache hits, remote GitHub direct inputs, and concurrent lookups.
+
+---
+
 ## [1.2.0] - 2026-05-25
 
 ### Added
