@@ -21,6 +21,7 @@ func DefaultConfig() *Config {
 		Client:      checker.DefaultClient(),
 		ConfigPath:  "",
 		OutputPath:  "",
+		GithubRepos: nil,
 	}
 }
 
@@ -55,6 +56,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&config.NoColor, "no-color", false, "Disable color output")
 	rootCmd.Flags().StringVarP(&config.ConfigPath, "config", "c", "", "Path to the YAML configuration file (default: auto-detects 'gomajor.yaml' in current directory)")
 	rootCmd.Flags().StringVarP(&config.OutputPath, "output", "o", "", "Path to save YAML results (defaults to 'gomajor-report.yaml' if outputting to a file, otherwise printed to terminal)")
+	rootCmd.Flags().StringSliceVarP(&config.GithubRepos, "github", "g", nil, "Check GitHub repositories directly (comma-separated)")
 }
 
 // resolveModFile returns the path to use for go.mod, auto-discovering it when

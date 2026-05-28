@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -19,6 +20,9 @@ import (
 type Client struct {
 	HTTPClient *http.Client
 	ProxyBase  string
+
+	cacheMu     sync.RWMutex
+	latestCache map[string]string // maps modPath to latest version found
 }
 
 // DefaultClient returns a client with standard settings.
@@ -37,8 +41,9 @@ func DefaultClient() *Client {
 	}
 
 	return &Client{
-		HTTPClient: &http.Client{Timeout: 10 * time.Second},
-		ProxyBase:  strings.TrimRight(proxy, "/"),
+		HTTPClient:  &http.Client{Timeout: 10 * time.Second},
+		ProxyBase:   strings.TrimRight(proxy, "/"),
+		latestCache: make(map[string]string),
 	}
 }
 
@@ -108,6 +113,33 @@ func nextMajorPath(basePath string, major int) string {
 // latestVersion returns the latest released version for a module path from the
 // Go proxy. Returns ("", false) if nothing is found or an error occurs.
 func (c *Client) latestVersion(ctx context.Context, modPath string) (string, bool) {
+	c.cacheMu.RLock()
+	if c.latestCache != nil {
+		if ver, ok := c.latestCache[modPath]; ok {
+			c.cacheMu.RUnlock()
+			return ver, ver != ""
+		}
+	}
+	c.cacheMu.RUnlock()
+
+	version, ok := c.fetchLatestVersion(ctx, modPath)
+
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+	if c.latestCache == nil {
+		c.latestCache = make(map[string]string)
+	}
+	if ok {
+		c.latestCache[modPath] = version
+	} else {
+		c.latestCache[modPath] = ""
+	}
+
+	return version, ok
+}
+
+// fetchLatestVersion performs the actual HTTP request to the Go proxy.
+func (c *Client) fetchLatestVersion(ctx context.Context, modPath string) (string, bool) {
 	escaped, err := escapePath(modPath)
 	if err != nil {
 		return "", false

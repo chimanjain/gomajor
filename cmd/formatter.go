@@ -28,18 +28,18 @@ func printTextResults(results []checker.ModuleInfo) bool {
 	for _, info := range results {
 		if info.HasUpdate {
 			if first {
-				fmt.Fprintln(w, headerColor("MODULE\tCURRENT\tLATEST\tNEW PATH"))
+				_, _ = fmt.Fprintln(w, headerColor("MODULE\tCURRENT\tLATEST\tNEW PATH"))
 				first = false
 			}
 			hasUpdates = true
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
 				color.CyanString(info.BasePath),
 				info.CurrentVersion,
 				color.YellowString(info.LatestMajorVersion),
 				color.HiBlackString(info.LatestMajorPath))
 		}
 	}
-	w.Flush()
+	_ = w.Flush()
 	if hasUpdates {
 		fmt.Println()
 	}
@@ -65,18 +65,18 @@ func printMultiTextResults(results []SourceResult) {
 		for _, dep := range res.Dependencies {
 			if dep.HasUpdate {
 				if first {
-					fmt.Fprintln(w, "  "+headerColor("MODULE\tCURRENT\tLATEST\tNEW PATH"))
+					_, _ = fmt.Fprintln(w, "  "+headerColor("MODULE\tCURRENT\tLATEST\tNEW PATH"))
 					first = false
 				}
 				hasUpdates = true
-				fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n",
+				_, _ = fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n",
 					color.CyanString(dep.Module),
 					dep.CurrentVersion,
 					color.YellowString(dep.LatestMajorVersion),
 					color.HiBlackString(dep.LatestMajorPath))
 			}
 		}
-		w.Flush()
+		_ = w.Flush()
 
 		if !hasUpdates {
 			fmt.Println(color.GreenString("  ✔ All checked dependencies are on their latest major versions."))

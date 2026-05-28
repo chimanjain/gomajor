@@ -22,11 +22,9 @@ func runChecker(fileExplicit, configExplicit, outputExplicit bool) {
 
 func runCheckerWithConfig(cfg *Config, fileExplicit, configExplicit, outputExplicit bool) error {
 	configPath := resolveConfigPath(cfg, configExplicit)
-
-	if configPath != "" {
+	if configPath != "" || len(cfg.GithubRepos) > 0 {
 		return runMultiChecker(cfg, configPath, outputExplicit)
 	}
-
 	return runSingleChecker(cfg, fileExplicit)
 }
 
@@ -190,18 +188,26 @@ func checkModContent(cfg *Config, sourceName string, sourceType string, content 
 }
 
 func runMultiChecker(cfg *Config, configPath string, outputExplicit bool) error {
-	content, err := os.ReadFile(configPath)
-	if err != nil {
-		return fmt.Errorf("reading config file %s: %w", configPath, err)
+	var yamlCfg YAMLConfig
+
+	if configPath != "" {
+		content, err := os.ReadFile(configPath)
+		if err != nil {
+			return fmt.Errorf("reading config file %s: %w", configPath, err)
+		}
+
+		if err := yaml.Unmarshal(content, &yamlCfg); err != nil {
+			return fmt.Errorf("parsing YAML config: %w", err)
+		}
 	}
 
-	var yamlCfg YAMLConfig
-	if err := yaml.Unmarshal(content, &yamlCfg); err != nil {
-		return fmt.Errorf("parsing YAML config: %w", err)
+	// Merge command-line github repos into the configuration.
+	if len(cfg.GithubRepos) > 0 {
+		yamlCfg.Github = append(yamlCfg.Github, cfg.GithubRepos...)
 	}
 
 	if len(yamlCfg.Local) == 0 && len(yamlCfg.Github) == 0 {
-		return fmt.Errorf("no local or github sources specified in configuration file %s", configPath)
+		return fmt.Errorf("no local or github sources specified")
 	}
 
 	var results []SourceResult

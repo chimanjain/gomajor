@@ -177,38 +177,93 @@ func TestFindLatestMajor_CurrentMajor1(t *testing.T) {
 
 func TestDefaultClient(t *testing.T) {
 	t.Run("Default", func(t *testing.T) {
-		os.Setenv("GOPROXY", "")
-		defer os.Unsetenv("GOPROXY")
+		_ = os.Setenv("GOPROXY", "")
 		c := DefaultClient()
 		if c.ProxyBase != "https://proxy.golang.org" {
 			t.Errorf("Expected https://proxy.golang.org, got %s", c.ProxyBase)
 		}
+		_ = os.Unsetenv("GOPROXY")
 	})
 
 	t.Run("Custom", func(t *testing.T) {
-		os.Setenv("GOPROXY", "https://myproxy.com")
-		defer os.Unsetenv("GOPROXY")
+		_ = os.Setenv("GOPROXY", "https://myproxy.com")
 		c := DefaultClient()
 		if c.ProxyBase != "https://myproxy.com" {
 			t.Errorf("Expected https://myproxy.com, got %s", c.ProxyBase)
 		}
+		_ = os.Unsetenv("GOPROXY")
 	})
 
 	t.Run("List", func(t *testing.T) {
-		os.Setenv("GOPROXY", "https://proxy1.com,https://proxy2.com,direct")
-		defer os.Unsetenv("GOPROXY")
+		_ = os.Setenv("GOPROXY", "https://proxy1.com,https://proxy2.com,direct")
 		c := DefaultClient()
 		if c.ProxyBase != "https://proxy1.com" {
 			t.Errorf("Expected https://proxy1.com, got %s", c.ProxyBase)
 		}
+		_ = os.Unsetenv("GOPROXY")
 	})
 
 	t.Run("DirectOrOff", func(t *testing.T) {
-		os.Setenv("GOPROXY", "direct")
-		defer os.Unsetenv("GOPROXY")
+		_ = os.Setenv("GOPROXY", "direct")
 		c := DefaultClient()
 		if c.ProxyBase != "https://proxy.golang.org" {
 			t.Errorf("Expected default proxy when direct, got %s", c.ProxyBase)
 		}
+		_ = os.Unsetenv("GOPROXY")
 	})
+}
+
+func TestClient_Cache(t *testing.T) {
+	var hits int
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		hits++
+		if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
+			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
+		} else {
+			rw.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		HTTPClient:  server.Client(),
+		ProxyBase:   server.URL,
+		latestCache: make(map[string]string),
+	}
+
+	// First request: Cache miss, hits should be 1
+	ver, ok := client.latestVersion(context.Background(), "github.com/foo/bar/v2")
+	if !ok || ver != "v2.0.0" {
+		t.Fatalf("Expected v2.0.0, got %s (ok=%t)", ver, ok)
+	}
+	if hits != 1 {
+		t.Errorf("Expected 1 hit to server, got %d", hits)
+	}
+
+	// Second request: Cache hit, hits should still be 1
+	ver2, ok2 := client.latestVersion(context.Background(), "github.com/foo/bar/v2")
+	if !ok2 || ver2 != "v2.0.0" {
+		t.Fatalf("Expected v2.0.0 on second call, got %s (ok=%t)", ver2, ok2)
+	}
+	if hits != 1 {
+		t.Errorf("Expected hits to remain 1 due to cache, got %d", hits)
+	}
+
+	// Third request for a nonexistent path: Cache miss on negative result, hits should be 2
+	_, ok3 := client.latestVersion(context.Background(), "github.com/nonexistent")
+	if ok3 {
+		t.Fatalf("Expected path to be nonexistent")
+	}
+	if hits != 2 {
+		t.Errorf("Expected 2 hits to server, got %d", hits)
+	}
+
+	// Fourth request for nonexistent path: Cache hit (negative caching), hits should still be 2
+	_, ok4 := client.latestVersion(context.Background(), "github.com/nonexistent")
+	if ok4 {
+		t.Fatalf("Expected path to be nonexistent on cache hit")
+	}
+	if hits != 2 {
+		t.Errorf("Expected hits to remain 2 due to negative caching, got %d", hits)
+	}
 }

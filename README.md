@@ -1,5 +1,9 @@
 # GoMajor
 
+<p align="center">
+  <img src="assets/gomajor.jpeg" alt="GoMajor Logo" width="240" height="240" />
+</p>
+
 A command-line tool that parses your `go.mod` file to proactively discover **major version upgrades** for your Go dependencies.
 
 Standard Go commands (like `go list -m -u all`) often won't highlight new major version updates because Go considers different major versions (e.g., `github.com/user/gomodule/v2` vs `github.com/user/gomodule/v3`) as entirely different module paths. This tool bridges that gap by intelligently querying your Go Module Proxy (respecting `GOPROXY`) to see if a higher major version exists.
@@ -56,6 +60,7 @@ If you built from source, run the compiled binary:
 | `--no-color` | | Disable colorized output. Useful for CI/CD logs or plain text environments. | `false` |
 | `--config` | `-c` | Provide a path to a YAML configuration file to check multiple local and remote `go.mod` files. By default, checks for a `gomajor.yaml` in the current directory. | `""` (checks current directory) |
 | `--output` | `-o` | Provide a path to save the structured results in YAML format. | `""` (defaults to stdout or 'gomajor-report.yaml') |
+| `--github` | `-g` | Check GitHub repositories directly (comma-separated) without a YAML config file. | `""` |
 
 ### Environment Variables
 
@@ -68,20 +73,38 @@ GoMajor respects the standard Go environment variables:
 **Check direct dependencies in the current directory:**
 
 ```bash
-./gomajor
+gomajor
 ```
 
 **Check all dependencies (direct and indirect) for a specific project:**
 
 ```bash
-./gomajor --file /path/to/your/project/go.mod --all
+gomajor --file /path/to/your/project/go.mod --all
 ```
 
 **Probe further into the future (check up to 10 major versions ahead):**
 
 ```bash
-./gomajor -m 10
+gomajor -m 10
 ```
+
+### Direct GitHub Checking (No Config File)
+
+You can check remote GitHub repositories directly from the CLI without creating or using a `gomajor.yaml` file.
+
+**Check a single GitHub repository directly:**
+
+```bash
+gomajor --github owner/repo
+```
+
+**Check multiple GitHub repositories (comma-separated) and save the results:**
+
+```bash
+gomajor -g owner/repo1,github.com/owner/repo2,https://github.com/owner/repo3 -o report.yaml
+```
+
+The tool will automatically probe the default branches (`main` or `master`) or download directly if a specific branch/file path is supplied.
 
 ---
 
@@ -112,17 +135,17 @@ output: "gomajor-report.yaml"
 
 ### Running with Configuration
 
-1. **Auto-Detection**: If a `gomajor.yaml` file is present in the current working directory, simply running `./gomajor` will automatically run in multi-source mode.
+1. **Auto-Detection**: If a `gomajor.yaml` file is present in the current working directory, simply running `gomajor` will automatically run in multi-source mode.
 2. **Explicit Config Path**: Specify a custom path to your YAML config file:
 
    ```bash
-   ./gomajor -c my-config.yaml
+   gomajor -c my-config.yaml
    ```
 
 3. **Explicit Output Report**: Override or set the output target file from the command line:
 
    ```bash
-   ./gomajor -c my-config.yaml -o custom-report.yaml
+   gomajor -c my-config.yaml -o custom-report.yaml
    ```
 
 ### Output Formats
