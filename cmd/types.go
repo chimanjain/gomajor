@@ -14,6 +14,7 @@ type Config struct {
 	Client      *checker.Client
 	ConfigPath  string
 	OutputPath  string
+	GithubRepos []string
 }
 
 // YAMLConfig defines the structure for the configuration YAML file.

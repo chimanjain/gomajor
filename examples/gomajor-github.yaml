@@ -18,4 +18,4 @@ github:
 
   # 4. Direct link to a go.mod file on a specific branch or commit
   # Fetches the go.mod directly from the specified location.
-  - "https://github.com/google/uuid/blob/master/go.mod"
+  - "https://github.com/aquasecurity/trivy/blob/main/go.mod"
