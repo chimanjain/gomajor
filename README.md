@@ -4,6 +4,11 @@
   <img src="assets/gomajor.jpeg" alt="GoMajor Logo" width="200" height="200" />
 </p>
 
+<p align="center">
+  <a href="https://goreportcard.com/report/github.com/chimanjain/gomajor"><img src="https://goreportcard.com/badge/github.com/chimanjain/gomajor" alt="Go Report Card"></a>
+  <a href="https://pkg.go.dev/github.com/chimanjain/gomajor"><img src="https://pkg.go.dev/badge/github.com/chimanjain/gomajor.svg" alt="Go Reference"></a>
+</p>
+
 A sleek, color-coded CLI tool that parses `go.mod` files to proactively discover **minor updates** (🟢 Green) and **major upgrades** (🟡 Yellow) by querying your Go Module Proxy (respecting `GOPROXY`).
 
 Standard commands like `go list -m -u all` fail to highlight new major versions because Go treats different major versions (e.g. `/v2` vs `/v3`) as separate modules. **GoMajor** bridges this gap.

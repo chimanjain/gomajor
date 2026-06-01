@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestCheck(t *testing.T) {
@@ -241,4 +243,65 @@ func TestCheck_DisableFlags(t *testing.T) {
 		}
 	})
 }
+
+func TestClient_Singleflight(t *testing.T) {
+	var hits int
+	var mu sync.Mutex
+	
+	// A delay is introduced inside the server to ensure concurrent client requests
+	// are in flight at the same time, allowing coalescing to take place.
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		mu.Lock()
+		hits++
+		mu.Unlock()
+		
+		time.Sleep(100 * time.Millisecond)
+		if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
+			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
+		} else {
+			rw.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		HTTPClient:  server.Client(),
+		ProxyBase:   server.URL,
+		latestCache: make(map[string]string),
+	}
+
+	const concurrentRequests = 10
+	var wg sync.WaitGroup
+	wg.Add(concurrentRequests)
+
+	results := make([]string, concurrentRequests)
+	successes := make([]bool, concurrentRequests)
+
+	for i := 0; i < concurrentRequests; i++ {
+		go func(index int) {
+			defer wg.Done()
+			ver, ok := client.latestVersion(context.Background(), "github.com/foo/bar/v2")
+			results[index] = ver
+			successes[index] = ok
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Assert all concurrent requests finished successfully and fetched the correct value
+	for i := 0; i < concurrentRequests; i++ {
+		if !successes[i] || results[i] != "v2.0.0" {
+			t.Errorf("Request %d failed: got %s (ok=%t), expected v2.0.0", i, results[i], successes[i])
+		}
+	}
+
+	// Assert singleflight coalesced duplicate calls so that only a single request was sent to the server
+	mu.Lock()
+	actualHits := hits
+	mu.Unlock()
+	if actualHits != 1 {
+		t.Errorf("Expected exactly 1 proxy hit due to singleflight coalescing, got %d", actualHits)
+	}
+}
+
 

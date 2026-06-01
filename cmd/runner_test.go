@@ -2,16 +2,21 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/chimanjain/gomajor/checker"
 	"go.yaml.in/yaml/v3"
+	"golang.org/x/mod/modfile"
+	"golang.org/x/mod/module"
 )
 
 func TestRunCheckerTable(t *testing.T) {
@@ -536,5 +541,66 @@ func TestPrintMultiJsonResults(t *testing.T) {
 
 	if len(output.Results) != 1 || output.Results[0].Source != "test-source" {
 		t.Errorf("unexpected output struct: %+v", output)
+	}
+}
+
+func TestCheckDependencies_Semaphore(t *testing.T) {
+	var activeCount int
+	var maxActive int
+	var mu sync.Mutex
+
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		mu.Lock()
+		activeCount++
+		if activeCount > maxActive {
+			maxActive = activeCount
+		}
+		mu.Unlock()
+
+		time.Sleep(50 * time.Millisecond)
+
+		mu.Lock()
+		activeCount--
+		mu.Unlock()
+
+		_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v1.0.0"})
+	}))
+	defer server.Close()
+
+	client := &checker.Client{
+		HTTPClient: server.Client(),
+		ProxyBase:  server.URL,
+	}
+
+	cfg := &Config{
+		Client:   client,
+		MaxProbe: 0, // Disable major probing to keep request profile simple
+		Minor:    true,
+	}
+	cfg.Client.DisableMinor = false
+	cfg.Client.DisableMajor = true
+
+	// Construct 40 requirements (double the semaphore cap of 20)
+	var reqs []*modfile.Require
+	for i := 1; i <= 40; i++ {
+		reqs = append(reqs, &modfile.Require{
+			Mod: module.Version{
+				Path:    fmt.Sprintf("github.com/foo/bar%d", i),
+				Version: "v1.0.0",
+			},
+		})
+	}
+
+	_ = checkDependencies(cfg, reqs)
+
+	mu.Lock()
+	highestConcurrency := maxActive
+	mu.Unlock()
+
+	if highestConcurrency > 20 {
+		t.Errorf("Expected maximum concurrency to be capped at 20, but got %d", highestConcurrency)
+	}
+	if highestConcurrency == 0 {
+		t.Errorf("Expected concurrency to be recorded, but got 0")
 	}
 }
