@@ -15,6 +15,7 @@ import (
 
 	"github.com/chimanjain/gomajor/utils"
 	"golang.org/x/mod/semver"
+	"golang.org/x/sync/singleflight"
 )
 
 // Client handles HTTP requests to the Go module proxy.
@@ -26,6 +27,7 @@ type Client struct {
 
 	cacheMu     sync.RWMutex
 	latestCache map[string]string // maps modPath to latest version found
+	sfGroup     singleflight.Group
 }
 
 // DefaultClient returns a client with standard settings.
@@ -90,7 +92,18 @@ func (c *Client) latestVersion(ctx context.Context, modPath string) (string, boo
 	}
 	c.cacheMu.RUnlock()
 
-	version, ok := c.fetchLatestVersion(ctx, modPath)
+	val, err, _ := c.sfGroup.Do(modPath, func() (interface{}, error) {
+		version, ok := c.fetchLatestVersion(ctx, modPath)
+		if !ok {
+			return "", fmt.Errorf("failed to fetch")
+		}
+		return version, nil
+	})
+
+	version := ""
+	if err == nil {
+		version = val.(string)
+	}
 
 	c.cacheMu.Lock()
 	if c.latestCache == nil {
@@ -99,7 +112,7 @@ func (c *Client) latestVersion(ctx context.Context, modPath string) (string, boo
 	c.latestCache[modPath] = version
 	c.cacheMu.Unlock()
 
-	return version, ok
+	return version, version != ""
 }
 
 // fetchLatestVersion performs the actual HTTP request to the Go proxy.

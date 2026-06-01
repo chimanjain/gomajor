@@ -215,10 +215,15 @@ func checkDependencies(cfg *Config, reqs []*modfile.Require) []checker.ModuleInf
 	var wg sync.WaitGroup
 	resultsChan := make(chan checker.ModuleInfo, len(reqs))
 
+	// Limit concurrent proxy queries to 20 to prevent socket/rate-limit issues
+	sem := make(chan struct{}, 20)
+
 	for _, req := range reqs {
 		wg.Add(1)
 		go func(modPath, version string) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			info := cfg.Client.Check(context.Background(), modPath, version, cfg.MaxProbe)
 			resultsChan <- info
 		}(req.Mod.Path, req.Mod.Version)
