@@ -26,17 +26,31 @@ func printTextResults(results []checker.ModuleInfo) bool {
 
 	first := true
 	for _, info := range results {
-		if info.HasUpdate {
+		if info.HasUpdate || info.HasMinorUpdate {
 			if first {
-				_, _ = fmt.Fprintln(w, headerColor("MODULE\tCURRENT\tLATEST\tNEW PATH"))
+				_, _ = fmt.Fprintln(w, headerColor("MODULE\tCURRENT\tMINOR\tMAJOR\tNEW PATH"))
 				first = false
 			}
 			hasUpdates = true
-			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+			
+			minor := "-"
+			if info.HasMinorUpdate {
+				minor = color.GreenString(info.LatestMinorVersion)
+			}
+			
+			major := "-"
+			newPath := "-"
+			if info.HasUpdate {
+				major = color.YellowString(info.LatestMajorVersion)
+				newPath = color.HiBlackString(info.LatestMajorPath)
+			}
+
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 				color.CyanString(info.BasePath),
 				info.CurrentVersion,
-				color.YellowString(info.LatestMajorVersion),
-				color.HiBlackString(info.LatestMajorPath))
+				minor,
+				major,
+				newPath)
 		}
 	}
 	_ = w.Flush()
@@ -63,17 +77,31 @@ func printMultiTextResults(results []SourceResult) {
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
 		first := true
 		for _, dep := range res.Dependencies {
-			if dep.HasUpdate {
+			if dep.HasUpdate || dep.HasMinorUpdate {
 				if first {
-					_, _ = fmt.Fprintln(w, "  "+headerColor("MODULE\tCURRENT\tLATEST\tNEW PATH"))
+					_, _ = fmt.Fprintln(w, "  "+headerColor("MODULE\tCURRENT\tMINOR\tMAJOR\tNEW PATH"))
 					first = false
 				}
 				hasUpdates = true
-				_, _ = fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n",
+				
+				minor := "-"
+				if dep.HasMinorUpdate {
+					minor = color.GreenString(dep.LatestMinorVersion)
+				}
+				
+				major := "-"
+				newPath := "-"
+				if dep.HasUpdate {
+					major = color.YellowString(dep.LatestMajorVersion)
+					newPath = color.HiBlackString(dep.LatestMajorPath)
+				}
+
+				_, _ = fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\n",
 					color.CyanString(dep.Module),
 					dep.CurrentVersion,
-					color.YellowString(dep.LatestMajorVersion),
-					color.HiBlackString(dep.LatestMajorPath))
+					minor,
+					major,
+					newPath)
 			}
 		}
 		_ = w.Flush()

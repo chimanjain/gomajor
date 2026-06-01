@@ -1,182 +1,100 @@
 # GoMajor
 
 <p align="center">
-  <img src="assets/gomajor.jpeg" alt="GoMajor Logo" width="240" height="240" />
+  <img src="assets/gomajor.jpeg" alt="GoMajor Logo" width="200" height="200" />
 </p>
 
-A command-line tool that parses your `go.mod` file to proactively discover **major version upgrades** for your Go dependencies.
+A sleek, color-coded CLI tool that parses `go.mod` files to proactively discover **minor updates** (🟢 Green) and **major upgrades** (🟡 Yellow) by querying your Go Module Proxy (respecting `GOPROXY`).
 
-Standard Go commands (like `go list -m -u all`) often won't highlight new major version updates because Go considers different major versions (e.g., `github.com/user/gomodule/v2` vs `github.com/user/gomodule/v3`) as entirely different module paths. This tool bridges that gap by intelligently querying your Go Module Proxy (respecting `GOPROXY`) to see if a higher major version exists.
-
-## Installation
-
-### Using `go install`
-
-Install the latest version of GoMajor directly:
-
-```bash
-go install github.com/chimanjain/gomajor@latest
-```
-
-Ensure your `GOBIN` or `GOPATH/bin` is in your system's `PATH`.
-
-### Building from Source
-
-Alternatively, clone the repository and compile the binary manually:
-
-```bash
-# Clone the repository
-git clone https://github.com/chimanjain/gomajor.git
-cd gomajor
-
-# Build the executable
-go build -o gomajor
-```
-
-## Usage
-
-You can run the tool in any directory containing a `go.mod` file.
-
-If you installed via `go install`, run:
-
-```bash
-gomajor
-```
-
-If you built from source, run the compiled binary:
-
-```bash
-./gomajor
-```
-
-### Flags
-
-| Flag | Shorthand | Description | Default |
-|------|-----------|-------------|---------|
-| `--file` | `-f` | Provide a specific path to a `go.mod` file. If not provided, it will automatically search in your current working directory, and then the directory of the tool's executable. | `""` (auto-detect) |
-| `--all` | `-a` | Check all dependencies, including indirect ones (marked with `// indirect` in `go.mod`). By default, only direct dependencies are analyzed. | `false` |
-| `--max-probe` | `-m` | The maximum number of subsequent major versions to probe for when querying the Go proxy (e.g., if you are on `v2`, it will check up to `v7` if set to `5`). | `5` |
-| `--json` | | Output the results in JSON format for easier automation and piping. | `false` |
-| `--no-color` | | Disable colorized output. Useful for CI/CD logs or plain text environments. | `false` |
-| `--config` | `-c` | Provide a path to a YAML configuration file to check multiple local and remote `go.mod` files. By default, checks for a `gomajor.yaml` in the current directory. | `""` (checks current directory) |
-| `--output` | `-o` | Provide a path to save the structured results in YAML format. | `""` (defaults to stdout or 'gomajor-report.yaml') |
-| `--github` | `-g` | Check GitHub repositories directly (comma-separated) without a YAML config file. | `""` |
-
-### Environment Variables
-
-GoMajor respects the standard Go environment variables:
-
-- `GOPROXY`: Specifies the Go module proxy to use. If not set, it defaults to `https://proxy.golang.org`.
-
-## Examples
-
-**Check direct dependencies in the current directory:**
-
-```bash
-gomajor
-```
-
-**Check all dependencies (direct and indirect) for a specific project:**
-
-```bash
-gomajor --file /path/to/your/project/go.mod --all
-```
-
-**Probe further into the future (check up to 10 major versions ahead):**
-
-```bash
-gomajor -m 10
-```
-
-### Direct GitHub Checking (No Config File)
-
-You can check remote GitHub repositories directly from the CLI without creating or using a `gomajor.yaml` file.
-
-**Check a single GitHub repository directly:**
-
-```bash
-gomajor --github owner/repo
-```
-
-**Check multiple GitHub repositories (comma-separated) and save the results:**
-
-```bash
-gomajor -g owner/repo1,github.com/owner/repo2,https://github.com/owner/repo3 -o report.yaml
-```
-
-The tool will automatically probe the default branches (`main` or `master`) or download directly if a specific branch/file path is supplied.
+Standard commands like `go list -m -u all` fail to highlight new major versions because Go treats different major versions (e.g. `/v2` vs `/v3`) as separate modules. **GoMajor** bridges this gap.
 
 ---
 
-## Multi-Source and Remote Checking (YAML Configuration)
+## Quick Start
 
-GoMajor supports checking multiple local `go.mod` files and remote GitHub repositories concurrently using a single YAML configuration file.
+### Installation
 
-### Configuration Format
+```bash
+# Install instantly
+go install github.com/chimanjain/gomajor@latest
 
-Create a `gomajor.yaml` file (or any custom name) defining your local paths and remote GitHub repositories:
+# Or build from source
+git clone https://github.com/chimanjain/gomajor.git && cd gomajor && go build -o gomajor
+```
+
+### Basic CLI Usage
+
+```bash
+# Check direct dependencies in the current directory
+gomajor
+
+# Check all (including indirect) dependencies for a specific file
+gomajor -f /path/to/go.mod --all
+
+# Disable minor or major checks explicitly
+gomajor --minor=false
+gomajor --major=false
+
+# Check remote GitHub repositories directly
+gomajor -g owner/repo,github.com/owner/repo2
+```
+
+---
+
+## Configuration & Flags
+
+### CLI Flags
+
+| Flag | Shorthand | Description | Default | Example |
+|------|-----------|-------------|---------|---------|
+| `--file` | `-f` | Path to target `go.mod` file | `""` (auto-detect) | `gomajor -f ./sub/go.mod` |
+| `--all` | `-a` | Check indirect dependencies too | `false` | `gomajor -a` |
+| `--max-probe` | `-m` | Max subsequent major versions to probe | `5` | `gomajor -m 10` |
+| `--minor` | | Toggle minor version updates checking | `true` | `gomajor --minor=false` |
+| `--major` | | Toggle major version upgrades checking | `true` | `gomajor --major=false` |
+| `--config` | `-c` | Path to multi-source YAML config file | `"gomajor.yaml"` | `gomajor -c my-config.yaml` |
+| `--github` | `-g` | Direct comma-separated GitHub repositories | `""` | `gomajor -g owner/repo` |
+| `--output` | `-o` | Save results to a structured YAML report file | `""` | `gomajor -o report.yaml` |
+| `--json` | | Output raw JSON data directly | `false` | `gomajor --json` |
+| `--no-color` | | Suppress ANSI colored terminal formatting | `false` | `gomajor --no-color` |
+
+### Multi-Source Checking (`gomajor.yaml`)
+
+Define multiple local directories and remote GitHub repositories to analyze in a single run:
 
 ```yaml
-# Local paths to go.mod files
 local:
-  - "/home/user/workspace/project1/go.mod"
-  - "/home/user/workspace/project2/go.mod"
-
-# Remote GitHub repositories or specific branches/files
+  - "/path/to/project1/go.mod"
 github:
-  - "owner/repo"                                             # Resolves main/master branch
-  - "github.com/owner/repo"                                  # Shorthand style
-  - "https://github.com/owner/repo"                          # Full repo link
-  - "https://github.com/owner/repo/blob/develop/go.mod"      # Specific branch/file
-
-# Output destination (optional)
+  - "owner/repo"
+  - "https://github.com/owner/repo2/blob/develop/go.mod"
 output: "gomajor-report.yaml"
+minor: true
+major: true
 ```
 
-### Running with Configuration
+### Environment Variables
 
-1. **Auto-Detection**: If a `gomajor.yaml` file is present in the current working directory, simply running `gomajor` will automatically run in multi-source mode.
-2. **Explicit Config Path**: Specify a custom path to your YAML config file:
+GoMajor respects the standard Go module proxy env:
 
-   ```bash
-   gomajor -c my-config.yaml
-   ```
+- `GOPROXY`: Specifies the Go module proxy URL (defaults to `https://proxy.golang.org`).
 
-3. **Explicit Output Report**: Override or set the output target file from the command line:
+---
 
-   ```bash
-   gomajor -c my-config.yaml -o custom-report.yaml
-   ```
+## Output Examples
 
-### Output Formats
-
-#### Terminal Printout (Default)
-
-When no output file is configured, results are printed in a clean, grouped, colorized tabulation per source:
+### Terminal Format (Default)
 
 ```text
-/path/to/local/go.mod (local)
-  ✔ All checked dependencies are on their latest major versions.
-
 https://raw.githubusercontent.com/spf13/cobra/main/go.mod (github)
-  MODULE               CURRENT   LATEST        NEW PATH
-  go.yaml.in/yaml/v3   v3.0.4    v4.0.0-rc.4   go.yaml.in/yaml/v4
+  MODULE               CURRENT   MINOR     MAJOR         NEW PATH
+  go.yaml.in/yaml/v3   v3.0.4    -         v4.0.0-rc.4   go.yaml.in/yaml/v4
 ```
 
-#### YAML Output Report
-
-When an output file is specified, results are serialized into structured, valid YAML matching the schema:
+### YAML Report Format
 
 ```yaml
 results:
-  - source: /home/user/workspace/project1/go.mod
-    source_type: local
-    dependencies:
-      - module: github.com/spf13/cobra
-        current_version: v1.10.2
-        latest_major_version: ""
-        latest_major_path: github.com/spf13/cobra
-        has_update: false
   - source: https://raw.githubusercontent.com/spf13/cobra/main/go.mod
     source_type: github
     dependencies:
@@ -189,30 +107,19 @@ results:
 
 ---
 
-## Development
+## Development & Architecture
 
-### Running Tests
-
-The project includes comprehensive unit tests for both the checker and cmd packages:
+### Testing
 
 ```bash
-# Run all tests
-go test ./...
-
-# Run tests with coverage
 go test -cover ./...
-
-# Run tests for a specific package
-go test ./checker
-go test ./cmd
 ```
 
 ### Architecture
 
-- **checker**: Core logic for detecting major version updates by querying the Go Module Proxy. The `Client` struct encapsulates HTTP operations and can be configured with custom HTTP clients and proxy URLs.
-- **cmd**: CLI interface built with Cobra. Decoupled into modular cohesive components:
-  - `types.go`: Defines configurations and output formats.
-  - `github.go`: Resolves and normalizes remote candidates.
-  - `runner.go`: Unifies concurrent checker flows.
-  - `formatter.go`: Handles visual printouts.
-  - `root.go`: Bootstraps CLI bindings.
+- **`checker`**: Core engine for querying the Go Module Proxy.
+- **`utils`**: Centralized, zero-dependency package for Go module path parsing, version path formatting, and proxy path escaping.
+- **`cmd`**: Decoupled CLI architecture built with Cobra:
+  - `runner.go` / `runner_single.go` / `runner_multi.go`: Execution flow routing and concurrent proxy processing.
+  - `formatter.go` / `types.go`: Output visualization structures.
+  - `github.go` / `root.go`: Remote path parsing and Cobra commands bootstrapping.

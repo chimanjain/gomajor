@@ -11,6 +11,8 @@ type Config struct {
 	CheckAll    bool
 	JsonOutput  bool
 	NoColor     bool
+	Minor       bool
+	Major       bool
 	Client      *checker.Client
 	ConfigPath  string
 	OutputPath  string
@@ -22,6 +24,8 @@ type YAMLConfig struct {
 	Local  []string `yaml:"local"`
 	Github []string `yaml:"github"`
 	Output string   `yaml:"output"`
+	Minor  *bool    `yaml:"minor,omitempty"`
+	Major  *bool    `yaml:"major,omitempty"`
 }
 
 // DependencyInfo holds information about a specific checked dependency.
@@ -31,6 +35,8 @@ type DependencyInfo struct {
 	LatestMajorVersion string `yaml:"latest_major_version"`
 	LatestMajorPath    string `yaml:"latest_major_path"`
 	HasUpdate          bool   `yaml:"has_update"`
+	LatestMinorVersion string `yaml:"latest_minor_version,omitempty"`
+	HasMinorUpdate     bool   `yaml:"has_minor_update,omitempty"`
 }
 
 // SourceResult holds checking results grouped by source.

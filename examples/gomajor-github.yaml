@@ -19,3 +19,10 @@ github:
   # 4. Direct link to a go.mod file on a specific branch or commit
   # Fetches the go.mod directly from the specified location.
   - "https://github.com/aquasecurity/trivy/blob/main/go.mod"
+
+# Check for minor version updates (defaults to true)
+minor: true
+
+# Check for major version upgrades (defaults to true)
+major: true
+
