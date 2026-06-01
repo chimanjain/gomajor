@@ -12,3 +12,10 @@ local:
 
   # Nested microservices or sub-packages in the same repository
   - "../another-project/go.mod"
+
+# Check for minor version updates (defaults to true)
+minor: true
+
+# Check for major version upgrades (defaults to true)
+major: true
+

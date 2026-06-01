@@ -9,17 +9,20 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/chimanjain/gomajor/utils"
+	"golang.org/x/mod/semver"
 )
 
 // Client handles HTTP requests to the Go module proxy.
 type Client struct {
 	HTTPClient *http.Client
 	ProxyBase  string
+	DisableMinor bool
+	DisableMajor bool
 
 	cacheMu     sync.RWMutex
 	latestCache map[string]string // maps modPath to latest version found
@@ -53,10 +56,6 @@ var defaultClient = DefaultClient()
 // Kept for backward compatibility with tests.
 var ProxyBase = defaultClient.ProxyBase
 
-// majorSuffixRe matches a trailing major-version segment in a module path.
-// Handles both "/vN" (GitHub style) and ".vN" (gopkg.in style).
-var majorSuffixRe = regexp.MustCompile(`((?:/|\.)(v(?:[2-9]|[1-9]\d+)))$`)
-
 // ModuleInfo holds information about a module and any discovered major update.
 type ModuleInfo struct {
 	// Current is the module path as it appears in go.mod (e.g. github.com/user/gomodule/v2).
@@ -75,39 +74,10 @@ type ModuleInfo struct {
 	LatestMajorVersion string
 	// HasUpdate is true when LatestMajor > CurrentMajor.
 	HasUpdate bool
-}
-
-// ParseModulePath splits a module path into its base path and current major version number.
-//
-// Examples:
-//
-//	"github.com/user/gomodule/v2"  -> ("github.com/user/gomodule", 2)
-//	"gopkg.in/yaml.v2"             -> ("gopkg.in/yaml", 2)
-//	"github.com/google/uuid"       -> ("github.com/google/uuid", 1)
-func ParseModulePath(modPath string) (basePath string, major int) {
-	loc := majorSuffixRe.FindStringSubmatchIndex(modPath)
-	if loc == nil {
-		return modPath, 1
-	}
-	// loc[2]:loc[3] is the full separator+vN match; loc[4]:loc[5] is just "vN"
-	vStr := modPath[loc[4]:loc[5]] // e.g. "v2"
-	n, err := strconv.Atoi(strings.TrimPrefix(vStr, "v"))
-	if err != nil || n < 2 {
-		return modPath, 1
-	}
-	// Remove the matched suffix from the path.
-	base := modPath[:loc[2]]
-	return base, n
-}
-
-// nextMajorPath builds the module path for the given major version, respecting
-// the gopkg.in ".vN" convention vs the standard "/vN" convention.
-func nextMajorPath(basePath string, major int) string {
-	// gopkg.in uses ".vN" convention.
-	if strings.HasPrefix(basePath, "gopkg.in/") {
-		return fmt.Sprintf("%s.v%d", basePath, major)
-	}
-	return fmt.Sprintf("%s/v%d", basePath, major)
+	// LatestMinorVersion is the latest semver tag found for the current major version.
+	LatestMinorVersion string
+	// HasMinorUpdate is true when LatestMinorVersion is semantically greater than CurrentVersion.
+	HasMinorUpdate bool
 }
 
 // latestVersion returns the latest released version for a module path from the
@@ -140,7 +110,7 @@ func (c *Client) latestVersion(ctx context.Context, modPath string) (string, boo
 
 // fetchLatestVersion performs the actual HTTP request to the Go proxy.
 func (c *Client) fetchLatestVersion(ctx context.Context, modPath string) (string, bool) {
-	escaped, err := escapePath(modPath)
+	escaped, err := utils.EscapePath(modPath)
 	if err != nil {
 		return "", false
 	}
@@ -171,36 +141,18 @@ func (c *Client) fetchLatestVersion(ctx context.Context, modPath string) (string
 	return info.Version, true
 }
 
-// escapePath applies Go module path escaping (uppercase letters become !lowercase).
-func escapePath(modPath string) (string, error) {
-	var sb strings.Builder
-	for _, r := range modPath {
-		if r >= 'A' && r <= 'Z' {
-			sb.WriteByte('!')
-			sb.WriteRune(r + 32)
-		} else {
-			sb.WriteRune(r)
-		}
-	}
-	// Validate the path is not empty.
-	if sb.Len() == 0 {
-		return "", fmt.Errorf("empty module path")
-	}
-	return sb.String(), nil
-}
-
 // FindLatestMajor probes the Go proxy for higher major versions beyond currentMajor,
 // up to a configurable ceiling. It returns the highest major version found and
 // the module path for it.
 func (c *Client) FindLatestMajor(ctx context.Context, basePath string, currentMajor int, maxProbe int) (latestMajor int, latestPath string, latestVer string) {
 	latestMajor = currentMajor
-	latestPath = nextMajorPath(basePath, currentMajor)
+	latestPath = utils.NextMajorPath(basePath, currentMajor)
 	if currentMajor == 1 {
 		latestPath = basePath
 	}
 
 	for candidate := currentMajor + 1; candidate <= currentMajor+maxProbe; candidate++ {
-		candidatePath := nextMajorPath(basePath, candidate)
+		candidatePath := utils.NextMajorPath(basePath, candidate)
 		ver, ok := c.latestVersion(ctx, candidatePath)
 		if !ok {
 			// Stop probing once we hit a gap.
@@ -215,7 +167,7 @@ func (c *Client) FindLatestMajor(ctx context.Context, basePath string, currentMa
 
 // Check analyses a single module (path + version from go.mod) and returns a ModuleInfo.
 func (c *Client) Check(ctx context.Context, modPath, modVersion string, maxProbe int) ModuleInfo {
-	basePath, currentMajor := ParseModulePath(modPath)
+	basePath, currentMajor := utils.ParseModulePath(modPath)
 	info := ModuleInfo{
 		Current:        modPath,
 		CurrentVersion: modVersion,
@@ -223,11 +175,25 @@ func (c *Client) Check(ctx context.Context, modPath, modVersion string, maxProbe
 		CurrentMajor:   currentMajor,
 	}
 
-	latestMajor, latestPath, latestVer := c.FindLatestMajor(ctx, basePath, currentMajor, maxProbe)
-	info.LatestMajor = latestMajor
-	info.LatestMajorPath = latestPath
-	info.LatestMajorVersion = latestVer
-	info.HasUpdate = latestMajor > currentMajor
+	if !c.DisableMajor {
+		latestMajor, latestPath, latestVer := c.FindLatestMajor(ctx, basePath, currentMajor, maxProbe)
+		info.LatestMajor = latestMajor
+		info.LatestMajorPath = latestPath
+		info.LatestMajorVersion = latestVer
+		info.HasUpdate = latestMajor > currentMajor
+	} else {
+		info.LatestMajor = currentMajor
+		info.LatestMajorPath = modPath
+	}
+
+	if !c.DisableMinor {
+		latestMinor, ok := c.latestVersion(ctx, modPath)
+		if ok && latestMinor != "" && semver.Compare(latestMinor, modVersion) > 0 {
+			info.LatestMinorVersion = latestMinor
+			info.HasMinorUpdate = true
+		}
+	}
+
 	return info
 }
 

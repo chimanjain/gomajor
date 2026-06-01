@@ -19,3 +19,10 @@ github:
 # Running GoMajor with this configuration will save results directly to this file
 # instead of printing them out to the standard output.
 output: "gomajor-report.yaml"
+
+# Check for minor version updates (defaults to true)
+minor: true
+
+# Check for major version upgrades (defaults to true)
+major: true
+

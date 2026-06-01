@@ -18,6 +18,8 @@ func DefaultConfig() *Config {
 		CheckAll:    false,
 		JsonOutput:  false,
 		NoColor:     false,
+		Minor:       true,
+		Major:       true,
 		Client:      checker.DefaultClient(),
 		ConfigPath:  "",
 		OutputPath:  "",
@@ -37,6 +39,8 @@ available for your dependencies.`,
 		if config.NoColor {
 			color.NoColor = true
 		}
+		config.Client.DisableMinor = !config.Minor
+		config.Client.DisableMajor = !config.Major
 		runChecker(cmd.Flags().Changed("file"), cmd.Flags().Changed("config"), cmd.Flags().Changed("output"))
 	},
 }
@@ -54,6 +58,8 @@ func init() {
 	rootCmd.Flags().BoolVarP(&config.CheckAll, "all", "a", false, "Check all dependencies, including indirect ones (by default only direct dependencies are checked)")
 	rootCmd.Flags().BoolVar(&config.JsonOutput, "json", false, "Output results in JSON format")
 	rootCmd.Flags().BoolVar(&config.NoColor, "no-color", false, "Disable color output")
+	rootCmd.Flags().BoolVar(&config.Minor, "minor", true, "Check for minor updates within the current major version")
+	rootCmd.Flags().BoolVar(&config.Major, "major", true, "Check for major version upgrades")
 	rootCmd.Flags().StringVarP(&config.ConfigPath, "config", "c", "", "Path to the YAML configuration file (default: auto-detects 'gomajor.yaml' in current directory)")
 	rootCmd.Flags().StringVarP(&config.OutputPath, "output", "o", "", "Path to save YAML results (defaults to 'gomajor-report.yaml' if outputting to a file, otherwise printed to terminal)")
 	rootCmd.Flags().StringSliceVarP(&config.GithubRepos, "github", "g", nil, "Check GitHub repositories directly (comma-separated)")
