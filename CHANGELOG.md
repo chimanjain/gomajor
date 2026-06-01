@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [1.4.0] - 2026-06-01
+
+### Added
+
+- **Minor Version Update Detection**: Added the `--minor` and `--major` command-line flags (both defaulting to `true`) to allow toggling checks for minor version updates within the current major version, and major version upgrades respectively. Added corresponding `minor` and `major` configuration fields within YAML config profiles.
+- **JSON Report and Output Support**: Added support for saving scan reports in JSON format via the `--output` / `-o` option (automatically detected from a `.json` file extension, otherwise defaulting to YAML). Added the `--json` flag to print structured scan results to stdout, and added an `examples/gomajor-json.yaml` configuration profile template.
+- **Comprehensive Integration Tests**: Replaced old test suites with extensive, mock-friendly unit and integration tests under `cmd/runner_test.go` that validate multiple sources, custom GOPROXY clients, and JSON/YAML reporting.
+
+---
+
 ## [1.3.0] - 2026-05-28
 
 ### Added
