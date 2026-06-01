@@ -1,7 +1,12 @@
 package cmd
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
+
 	"github.com/chimanjain/gomajor/checker"
+	"go.yaml.in/yaml/v3"
 )
 
 // Config holds the configuration for the checker command.
@@ -30,23 +35,62 @@ type YAMLConfig struct {
 
 // DependencyInfo holds information about a specific checked dependency.
 type DependencyInfo struct {
-	Module             string `yaml:"module"`
-	CurrentVersion     string `yaml:"current_version"`
-	LatestMajorVersion string `yaml:"latest_major_version"`
-	LatestMajorPath    string `yaml:"latest_major_path"`
-	HasUpdate          bool   `yaml:"has_update"`
-	LatestMinorVersion string `yaml:"latest_minor_version,omitempty"`
-	HasMinorUpdate     bool   `yaml:"has_minor_update,omitempty"`
+	Module             string `yaml:"module" json:"module"`
+	CurrentVersion     string `yaml:"current_version" json:"current_version"`
+	LatestMajorVersion string `yaml:"latest_major_version" json:"latest_major_version"`
+	LatestMajorPath    string `yaml:"latest_major_path" json:"latest_major_path"`
+	HasUpdate          bool   `yaml:"has_update" json:"has_update"`
+	LatestMinorVersion string `yaml:"latest_minor_version,omitempty" json:"latest_minor_version,omitempty"`
+	HasMinorUpdate     bool   `yaml:"has_minor_update,omitempty" json:"has_minor_update,omitempty"`
 }
 
 // SourceResult holds checking results grouped by source.
 type SourceResult struct {
-	Source       string           `yaml:"source"`
-	SourceType   string           `yaml:"source_type"`
-	Dependencies []DependencyInfo `yaml:"dependencies"`
+	Source       string           `yaml:"source" json:"source"`
+	SourceType   string           `yaml:"source_type" json:"source_type"`
+	Dependencies []DependencyInfo `yaml:"dependencies" json:"dependencies"`
 }
 
 // YAMLOutput defines the structured schema for the saved YAML output.
 type YAMLOutput struct {
-	Results []SourceResult `yaml:"results"`
+	Results []SourceResult `yaml:"results" json:"results"`
+}
+
+func toDependencyInfos(results []checker.ModuleInfo) []DependencyInfo {
+	depInfos := make([]DependencyInfo, len(results))
+	for i, info := range results {
+		depInfos[i] = DependencyInfo{
+			Module:             info.Current,
+			CurrentVersion:     info.CurrentVersion,
+			LatestMajorVersion: info.LatestMajorVersion,
+			LatestMajorPath:    info.LatestMajorPath,
+			HasUpdate:          info.HasUpdate,
+			LatestMinorVersion: info.LatestMinorVersion,
+			HasMinorUpdate:     info.HasMinorUpdate,
+		}
+	}
+	return depInfos
+}
+
+func writeReport(outputPath string, isJSON bool, results []SourceResult) error {
+	outputData := YAMLOutput{Results: results}
+	var bytes []byte
+	var err error
+	formatName := "YAML"
+
+	if isJSON {
+		formatName = "JSON"
+		bytes, err = json.MarshalIndent(outputData, "", "  ")
+	} else {
+		bytes, err = yaml.Marshal(outputData)
+	}
+
+	if err == nil {
+		err = os.WriteFile(outputPath, bytes, 0644)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to write %s output: %w", formatName, err)
+	}
+	fmt.Printf("Results written to %s file: %s\n", formatName, outputPath)
+	return nil
 }

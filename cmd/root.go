@@ -61,7 +61,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&config.Minor, "minor", true, "Check for minor updates within the current major version")
 	rootCmd.Flags().BoolVar(&config.Major, "major", true, "Check for major version upgrades")
 	rootCmd.Flags().StringVarP(&config.ConfigPath, "config", "c", "", "Path to the YAML configuration file (default: auto-detects 'gomajor.yaml' in current directory)")
-	rootCmd.Flags().StringVarP(&config.OutputPath, "output", "o", "", "Path to save YAML results (defaults to 'gomajor-report.yaml' if outputting to a file, otherwise printed to terminal)")
+	rootCmd.Flags().StringVarP(&config.OutputPath, "output", "o", "", "Path to save results in YAML or JSON format (defaults to 'gomajor-report.yaml' or 'gomajor-report.json' if outputting to a file, otherwise printed to terminal)")
 	rootCmd.Flags().StringSliceVarP(&config.GithubRepos, "github", "g", nil, "Check GitHub repositories directly (comma-separated)")
 }
 

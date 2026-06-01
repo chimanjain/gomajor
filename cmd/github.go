@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 )
 
@@ -16,57 +15,53 @@ func getGithubRawURLs(input string) []string {
 		return nil
 	}
 
-	// If it already looks like a direct raw URL, use it first.
-	if strings.HasPrefix(input, "https://raw.githubusercontent.com/") || strings.HasPrefix(input, "http://raw.githubusercontent.com/") {
+	if strings.Contains(input, "raw.githubusercontent.com") {
 		return []string{input}
 	}
 
-	// Normalize http(s)://github.com/owner/repo/blob/branch/go.mod or similar
-	if strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://") {
-		input = strings.TrimSuffix(input, "/")
-
-		// If it's a link to a go.mod file
-		// e.g., https://github.com/owner/repo/blob/branch/go.mod
-		reBlob := regexp.MustCompile(`https?://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+)`)
-		if reBlob.MatchString(input) {
-			raw := reBlob.ReplaceAllString(input, "https://raw.githubusercontent.com/$1/$2/$3/$4")
-			return []string{raw}
-		}
-
-		// If it's a link to a repo root: https://github.com/owner/repo
-		reRepo := regexp.MustCompile(`https?://github\.com/([^/]+)/([^/]+)`)
-		if reRepo.MatchString(input) {
-			m := reRepo.FindStringSubmatch(input)
-			owner := m[1]
-			repo := strings.TrimSuffix(m[2], ".git")
+	// Shorthand formats (e.g. "owner/repo" or "github.com/owner/repo"):
+	if !strings.HasPrefix(input, "http://") && !strings.HasPrefix(input, "https://") {
+		trimmed := strings.TrimPrefix(input, "github.com/")
+		trimmed = strings.TrimSuffix(trimmed, "/")
+		parts := strings.Split(trimmed, "/")
+		if len(parts) >= 2 {
+			owner := parts[0]
+			repo := strings.TrimSuffix(parts[1], ".git")
 			return []string{
 				fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/go.mod", owner, repo),
 				fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/go.mod", owner, repo),
 			}
 		}
-
 		return []string{input}
 	}
 
-	// It's a path like "github.com/owner/repo" or "owner/repo"
-	parts := strings.Split(input, "/")
+	// Full URLs that are not GitHub links (e.g. custom mock server URLs):
+	if !strings.Contains(input, "github.com/") {
+		return []string{input}
+	}
+
+	// It is a GitHub URL. Strip prefix to get the path segments.
+	trimmed := input
+	for _, prefix := range []string{"https://", "http://", "github.com/"} {
+		trimmed = strings.TrimPrefix(trimmed, prefix)
+	}
+	trimmed = strings.TrimSuffix(trimmed, "/")
+
+	parts := strings.Split(trimmed, "/")
 	if len(parts) >= 2 {
-		var owner, repo string
-		if parts[0] == "github.com" && len(parts) >= 3 {
-			owner = parts[1]
-			repo = parts[2]
-		} else {
-			owner = parts[0]
-			repo = parts[1]
+		owner := parts[0]
+		repo := strings.TrimSuffix(parts[1], ".git")
+		if len(parts) >= 5 && parts[2] == "blob" {
+			branch := parts[3]
+			path := strings.Join(parts[4:], "/")
+			return []string{fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", owner, repo, branch, path)}
 		}
-		repo = strings.TrimSuffix(repo, ".git")
 		return []string{
 			fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/go.mod", owner, repo),
 			fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/go.mod", owner, repo),
 		}
 	}
-
-	return nil
+	return []string{input}
 }
 
 // fetchGithubMod retrieves a go.mod from a GitHub repository or URL.
@@ -88,14 +83,16 @@ func fetchGithubMod(ctx context.Context, client *http.Client, pathOrUrl string) 
 			lastErr = err
 			continue
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			lastErr = fmt.Errorf("HTTP status %d: %s", resp.StatusCode, resp.Status)
+			_ = resp.Body.Close()
 			continue
 		}
 
 		content, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+
 		if err != nil {
 			lastErr = err
 			continue
