@@ -9,9 +9,21 @@
   <a href="https://pkg.go.dev/github.com/chimanjain/gomajor"><img src="https://pkg.go.dev/badge/github.com/chimanjain/gomajor.svg" alt="Go Reference"></a>
 </p>
 
-A sleek, color-coded CLI tool that parses `go.mod` files to proactively discover **minor updates** (🟢 Green) and **major upgrades** (🟡 Yellow) by querying your Go Module Proxy (respecting `GOPROXY`).
+A fast, color-coded CLI tool designed to help you keep your Go dependencies up-to-date. GoMajor parses your `go.mod` files and queries the Go Module Proxy to proactively discover both **minor updates** (🟢 Green) and **major upgrades** (🟡 Yellow).
 
-Standard commands like `go list -m -u all` fail to highlight new major versions because Go treats different major versions (e.g. `/v2` vs `/v3`) as separate modules. **GoMajor** bridges this gap.
+### 💡 Why GoMajor?
+
+Standard commands like `go list -m -u all` are great for finding minor updates, but they completely miss new major versions. Because Go treats different major versions (e.g., `github.com/foo/bar` vs `github.com/foo/bar/v2`) as entirely separate modules, standard tools won't notify you when a library releases a new major version. 
+
+**GoMajor bridges this gap**, ensuring you never miss a critical major release again.
+
+### ✨ Key Features
+
+- 🚀 **Discover Major Upgrades:** Finds new major versions (v2, v3+) that standard Go tools miss.
+- 🌐 **Remote Scanning:** Check dependencies directly from remote GitHub repositories without cloning.
+- 🎨 **Clear Visuals:** Color-coded terminal output for quick identification of update types.
+- ⚙️ **Multi-Source Config:** Check multiple local projects and remote repositories at once using a `yaml` config.
+- 📊 **CI/CD Ready:** Export dependency reports to structured JSON or YAML formats.
 
 ---
 
