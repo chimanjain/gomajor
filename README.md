@@ -37,6 +37,9 @@ gomajor --major=false
 
 # Check remote GitHub repositories directly
 gomajor -g owner/repo,github.com/owner/repo2
+
+# Check dependencies and save results directly to a structured report
+gomajor -o report.json
 ```
 
 ---
@@ -46,7 +49,7 @@ gomajor -g owner/repo,github.com/owner/repo2
 ### CLI Flags
 
 | Flag | Shorthand | Description | Default | Example |
-|------|-----------|-------------|---------|---------|
+| --- | --- | --- | --- | --- |
 | `--file` | `-f` | Path to target `go.mod` file | `""` (auto-detect) | `gomajor -f ./sub/go.mod` |
 | `--all` | `-a` | Check indirect dependencies too | `false` | `gomajor -a` |
 | `--max-probe` | `-m` | Max subsequent major versions to probe | `5` | `gomajor -m 10` |
@@ -54,8 +57,8 @@ gomajor -g owner/repo,github.com/owner/repo2
 | `--major` | | Toggle major version upgrades checking | `true` | `gomajor --major=false` |
 | `--config` | `-c` | Path to multi-source YAML config file | `"gomajor.yaml"` | `gomajor -c my-config.yaml` |
 | `--github` | `-g` | Direct comma-separated GitHub repositories | `""` | `gomajor -g owner/repo` |
-| `--output` | `-o` | Save results to a structured YAML report file | `""` | `gomajor -o report.yaml` |
-| `--json` | | Output raw JSON data directly | `false` | `gomajor --json` |
+| `--output` | `-o` | Save results to a structured YAML or JSON report file | `""` | `gomajor -o report.json` |
+| `--json` | | Format reports and stdout data in JSON | `false` | `gomajor --json` |
 | `--no-color` | | Suppress ANSI colored terminal formatting | `false` | `gomajor --no-color` |
 
 ### Multi-Source Checking (`gomajor.yaml`)
@@ -68,7 +71,7 @@ local:
 github:
   - "owner/repo"
   - "https://github.com/owner/repo2/blob/develop/go.mod"
-output: "gomajor-report.yaml"
+output: "gomajor-report.json" # Supports both .yaml and .json formats
 minor: true
 major: true
 ```
@@ -105,6 +108,28 @@ results:
         has_update: true
 ```
 
+### JSON Report Format
+
+```json
+{
+  "results": [
+    {
+      "source": "https://raw.githubusercontent.com/spf13/cobra/main/go.mod",
+      "source_type": "github",
+      "dependencies": [
+        {
+          "module": "go.yaml.in/yaml/v3",
+          "current_version": "v3.0.4",
+          "latest_major_version": "v4.0.0-rc.4",
+          "latest_major_path": "go.yaml.in/yaml/v4",
+          "has_update": true
+        }
+      ]
+    }
+  ]
+}
+```
+
 ---
 
 ## Development & Architecture
@@ -120,6 +145,6 @@ go test -cover ./...
 - **`checker`**: Core engine for querying the Go Module Proxy.
 - **`utils`**: Centralized, zero-dependency package for Go module path parsing, version path formatting, and proxy path escaping.
 - **`cmd`**: Decoupled CLI architecture built with Cobra:
-  - `runner.go` / `runner_single.go` / `runner_multi.go`: Execution flow routing and concurrent proxy processing.
-  - `formatter.go` / `types.go`: Output visualization structures.
+  - `runner.go`: Core execution flow routing and concurrent proxy checking.
+  - `formatter.go` / `types.go`: Output visualization and reporting structures.
   - `github.go` / `root.go`: Remote path parsing and Cobra commands bootstrapping.

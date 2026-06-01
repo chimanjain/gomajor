@@ -84,26 +84,20 @@ type ModuleInfo struct {
 // Go proxy. Returns ("", false) if nothing is found or an error occurs.
 func (c *Client) latestVersion(ctx context.Context, modPath string) (string, bool) {
 	c.cacheMu.RLock()
-	if c.latestCache != nil {
-		if ver, ok := c.latestCache[modPath]; ok {
-			c.cacheMu.RUnlock()
-			return ver, ver != ""
-		}
+	if ver, ok := c.latestCache[modPath]; ok {
+		c.cacheMu.RUnlock()
+		return ver, ver != ""
 	}
 	c.cacheMu.RUnlock()
 
 	version, ok := c.fetchLatestVersion(ctx, modPath)
 
 	c.cacheMu.Lock()
-	defer c.cacheMu.Unlock()
 	if c.latestCache == nil {
 		c.latestCache = make(map[string]string)
 	}
-	if ok {
-		c.latestCache[modPath] = version
-	} else {
-		c.latestCache[modPath] = ""
-	}
+	c.latestCache[modPath] = version
+	c.cacheMu.Unlock()
 
 	return version, ok
 }

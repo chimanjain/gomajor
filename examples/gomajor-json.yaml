@@ -1,0 +1,23 @@
+# GoMajor JSON Report Configuration Example
+#
+# This template demonstrates configuring GoMajor to check dependencies and
+# export the structured results to a clean JSON report file.
+
+# Local go.mod files to analyze
+local:
+  - "./go.mod"
+
+# Remote GitHub repositories to analyze
+github:
+  - "spf13/cobra"
+  - "github.com/go-gorm/gorm"
+
+# Destination where the structured JSON report results should be saved.
+# Setting the output extension to ".json" instructs GoMajor to save the results in JSON format.
+output: "gomajor-report.json"
+
+# Check for minor version updates (defaults to true)
+minor: true
+
+# Check for major version upgrades (defaults to true)
+major: true

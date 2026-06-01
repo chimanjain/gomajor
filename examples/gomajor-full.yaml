@@ -15,10 +15,11 @@ github:
   - "https://github.com/gin-gonic/gin"
   - "https://github.com/google/uuid/blob/master/go.mod"
 
-# Destination where the structured YAML report results should be saved.
+# Destination where the structured report results should be saved.
+# Supports both JSON (".json") and YAML (".yaml") report formats.
 # Running GoMajor with this configuration will save results directly to this file
 # instead of printing them out to the standard output.
-output: "gomajor-report.yaml"
+output: "gomajor-report.json"
 
 # Check for minor version updates (defaults to true)
 minor: true
