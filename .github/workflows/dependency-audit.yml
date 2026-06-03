@@ -1,8 +1,12 @@
-name: Dependency Audit
-on: [pull_request]
+name: GoMajor Dependency Audit
+permissions:
+  contents: read
+on:
+  pull_request:
+    branches: [main]
 
 jobs:
-  audit:
+  gomajor-dependency-audit:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
