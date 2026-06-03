@@ -13,7 +13,7 @@ A fast, color-coded CLI tool designed to help you keep your Go dependencies up-t
 
 ### 💡 Why GoMajor?
 
-Standard commands like `go list -m -u all` are great for finding minor updates, but they completely miss new major versions. Because Go treats different major versions (e.g., `github.com/foo/bar` vs `github.com/foo/bar/v2`) as entirely separate modules, standard tools won't notify you when a library releases a new major version. 
+Standard commands like `go list -m -u all` are great for finding minor updates, but they completely miss new major versions. Because Go treats different major versions (e.g., `github.com/foo/bar` vs `github.com/foo/bar/v2`) as entirely separate modules, standard tools won't notify you when a library releases a new major version.
 
 **GoMajor bridges this gap**, ensuring you never miss a critical major release again.
 
@@ -91,6 +91,39 @@ github:
 output: "gomajor-report.json" # Supports both .yaml and .json formats
 minor: true
 major: true
+```
+
+### GitHub Actions Integration
+
+You can integrate GoMajor into your CI/CD pipelines to automatically audit direct and indirect dependencies for both minor updates and major upgrades.
+
+Add the following workflow file to `.github/workflows/gomajor-dependency-audit.yml`:
+
+```yaml
+name: GoMajor Dependency Audit
+permissions:
+  contents: read
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  gomajor-dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Install GoMajor
+        run: go install github.com/chimanjain/gomajor@latest
+
+      - name: Run Dependency Audit
+        run: gomajor
 ```
 
 ### Environment Variables
