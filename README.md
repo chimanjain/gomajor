@@ -13,7 +13,7 @@ A fast, color-coded CLI tool designed to help you keep your Go dependencies up-t
 
 ### 💡 Why GoMajor?
 
-Standard commands like `go list -m -u all` are great for finding minor updates, but they completely miss new major versions. Because Go treats different major versions (e.g., `github.com/foo/bar` vs `github.com/foo/bar/v2`) as entirely separate modules, standard tools won't notify you when a library releases a new major version. 
+Standard commands like `go list -m -u all` are great for finding minor updates, but they completely miss new major versions. Because Go treats different major versions (e.g., `github.com/foo/bar` vs `github.com/foo/bar/v2`) as entirely separate modules, standard tools won't notify you when a library releases a new major version.
 
 **GoMajor bridges this gap**, ensuring you never miss a critical major release again.
 
