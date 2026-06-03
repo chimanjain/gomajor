@@ -93,6 +93,39 @@ minor: true
 major: true
 ```
 
+### GitHub Actions Integration
+
+You can integrate GoMajor into your CI/CD pipelines to automatically audit direct and indirect dependencies for both minor updates and major upgrades.
+
+Add the following workflow file to `.github/workflows/gomajor-dependency-audit.yml`:
+
+```yaml
+name: GoMajor Dependency Audit
+permissions:
+  contents: read
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  gomajor-dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Install GoMajor
+        run: go install github.com/chimanjain/gomajor@latest
+
+      - name: Run Dependency Audit
+        run: gomajor
+```
+
 ### Environment Variables
 
 GoMajor respects the standard Go module proxy env:
