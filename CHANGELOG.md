@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [1.5.0] - 2026-06-18
+
+### Added
+
+- **Private Modules Support**: Introduced automatic identification for private modules matching `GOPRIVATE` and `GONOPROXY` environment variables, skipping external proxy queries to avoid timeouts.
+- **GitHub Actions Integration**: Added a reusable dependency audit workflow (`.github/workflows/gomajor-dependency-audit.yml`) and documentation for automated periodic module checking in CI/CD.
+- **Sensitive URL Sanitization**: Added URL credentials sanitization to redact passwords/tokens from git and remote repository URLs in reports and terminal output.
+
+### Changed
+
+- **Improved Module Path Parsing**: Enhanced parsing logic to extract and match path separators (`/` vs `.`) to format subsequent major version candidate lookup paths.
+- **HTTP Client Optimization**: Configured custom HTTP transport settings to increase maximum idle connections and idle connections per host, improving connection reuse during high-concurrency proxy checks.
+- **Concurrency & Resource Management**: Implemented connection request throttling using semaphore-based concurrency limits and singleflight coalescing to coalesce identical concurrent module requests and prevent proxy rate limiting.
+- **Context Propagation**: Added full context propagation throughout the check and run operations to support clean cancellation and timeout handling.
+
+---
+
 ## [1.4.0] - 2026-06-01
 
 ### Added
