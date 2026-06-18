@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/chimanjain/gomajor/utils"
+	"golang.org/x/mod/module"
 	"golang.org/x/mod/semver"
 	"golang.org/x/sync/singleflight"
 )
@@ -45,8 +46,15 @@ func DefaultClient() *Client {
 		proxy = "https://proxy.golang.org"
 	}
 
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 100
+	transport.MaxIdleConnsPerHost = 20
+
 	return &Client{
-		HTTPClient:  &http.Client{Timeout: 10 * time.Second},
+		HTTPClient: &http.Client{
+			Timeout:   10 * time.Second,
+			Transport: transport,
+		},
 		ProxyBase:   strings.TrimRight(proxy, "/"),
 		latestCache: make(map[string]string),
 	}
@@ -66,6 +74,8 @@ type ModuleInfo struct {
 	CurrentVersion string
 	// BasePath is the module path without the major-version suffix (e.g. github.com/user/gomodule).
 	BasePath string
+	// Separator is the version suffix separator used in this module path ("/" or ".").
+	Separator string
 	// CurrentMajor is the currently used major version number (1 for unversioned, 2+ otherwise).
 	CurrentMajor int
 	// LatestMajor is the highest major version found on the proxy.
@@ -82,9 +92,25 @@ type ModuleInfo struct {
 	HasMinorUpdate bool
 }
 
+// isPrivateModule checks if the module path matches GOPRIVATE or GONOPROXY environment variables.
+func isPrivateModule(modPath string) bool {
+	globs := os.Getenv("GONOPROXY")
+	if globs == "" {
+		globs = os.Getenv("GOPRIVATE")
+	}
+	if globs == "" {
+		return false
+	}
+	return module.MatchPrefixPatterns(globs, modPath)
+}
+
 // latestVersion returns the latest released version for a module path from the
 // Go proxy. Returns ("", false) if nothing is found or an error occurs.
 func (c *Client) latestVersion(ctx context.Context, modPath string) (string, bool) {
+	if isPrivateModule(modPath) {
+		return "", false
+	}
+
 	c.cacheMu.RLock()
 	if ver, ok := c.latestCache[modPath]; ok {
 		c.cacheMu.RUnlock()
@@ -151,15 +177,15 @@ func (c *Client) fetchLatestVersion(ctx context.Context, modPath string) (string
 // FindLatestMajor probes the Go proxy for higher major versions beyond currentMajor,
 // up to a configurable ceiling. It returns the highest major version found and
 // the module path for it.
-func (c *Client) FindLatestMajor(ctx context.Context, basePath string, currentMajor int, maxProbe int) (latestMajor int, latestPath string, latestVer string) {
+func (c *Client) FindLatestMajor(ctx context.Context, basePath string, currentMajor int, maxProbe int, sep string) (latestMajor int, latestPath string, latestVer string) {
 	latestMajor = currentMajor
-	latestPath = utils.NextMajorPath(basePath, currentMajor)
-	if currentMajor == 1 {
+	latestPath = utils.NextMajorPath(basePath, currentMajor, sep)
+	if currentMajor == 1 && sep == "/" {
 		latestPath = basePath
 	}
 
 	for candidate := currentMajor + 1; candidate <= currentMajor+maxProbe; candidate++ {
-		candidatePath := utils.NextMajorPath(basePath, candidate)
+		candidatePath := utils.NextMajorPath(basePath, candidate, sep)
 		ver, ok := c.latestVersion(ctx, candidatePath)
 		if !ok {
 			// Stop probing once we hit a gap.
@@ -174,16 +200,17 @@ func (c *Client) FindLatestMajor(ctx context.Context, basePath string, currentMa
 
 // Check analyses a single module (path + version from go.mod) and returns a ModuleInfo.
 func (c *Client) Check(ctx context.Context, modPath, modVersion string, maxProbe int) ModuleInfo {
-	basePath, currentMajor := utils.ParseModulePath(modPath)
+	basePath, currentMajor, sep := utils.ParseModulePath(modPath)
 	info := ModuleInfo{
 		Current:        modPath,
 		CurrentVersion: modVersion,
 		BasePath:       basePath,
 		CurrentMajor:   currentMajor,
+		Separator:      sep,
 	}
 
 	if !c.DisableMajor {
-		latestMajor, latestPath, latestVer := c.FindLatestMajor(ctx, basePath, currentMajor, maxProbe)
+		latestMajor, latestPath, latestVer := c.FindLatestMajor(ctx, basePath, currentMajor, maxProbe, sep)
 		info.LatestMajor = latestMajor
 		info.LatestMajorPath = latestPath
 		info.LatestMajorVersion = latestVer

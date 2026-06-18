@@ -6,302 +6,342 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-func TestCheck(t *testing.T) {
-	// Start a local HTTP server
-	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		// Mock responses based on the URL path
-		switch req.URL.Path {
-		case "/github.com/foo/bar/v2/@latest":
-			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
-		case "/github.com/foo/bar/v3/@latest":
-			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v3.1.0"})
-		case "/github.com/foo/bar/v4/@latest":
-			rw.WriteHeader(http.StatusNotFound)
-		default:
-			rw.WriteHeader(http.StatusNotFound)
+func TestClient(t *testing.T) {
+	t.Run("DefaultClient", func(t *testing.T) {
+		tests := []struct {
+			name      string
+			goproxy   string
+			wantProxy string
+		}{
+			{"Default", "", "https://proxy.golang.org"},
+			{"Custom", "https://myproxy.com", "https://myproxy.com"},
+			{"List", "https://proxy1.com,https://proxy2.com,direct", "https://proxy1.com"},
+			{"Direct", "direct", "https://proxy.golang.org"},
+			{"Off", "off", "https://proxy.golang.org"},
 		}
-	}))
-	// Close the server when test finishes
-	defer server.Close()
 
-	client := &Client{
-		HTTPClient: server.Client(),
-		ProxyBase:  server.URL,
-	}
-
-	info := client.Check(context.Background(), "github.com/foo/bar/v2", "v2.0.0", 5)
-
-	if !info.HasUpdate {
-		t.Errorf("Expected HasUpdate to be true, got false")
-	}
-	if info.LatestMajor != 3 {
-		t.Errorf("Expected LatestMajor to be 3, got %d", info.LatestMajor)
-	}
-	if info.LatestMajorPath != "github.com/foo/bar/v3" {
-		t.Errorf("Expected LatestMajorPath to be github.com/foo/bar/v3, got %s", info.LatestMajorPath)
-	}
-	if info.LatestMajorVersion != "v3.1.0" {
-		t.Errorf("Expected LatestMajorVersion to be v3.1.0, got %s", info.LatestMajorVersion)
-	}
-}
-
-func TestLatestVersion_Error(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		if req.URL.Path == "/badjson/@latest" {
-			_, _ = rw.Write([]byte(`{"Version":`)) // truncated json
-			return
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				if tt.goproxy != "" {
+					t.Setenv("GOPROXY", tt.goproxy)
+				} else {
+					_ = os.Unsetenv("GOPROXY")
+				}
+				c := DefaultClient()
+				if c.ProxyBase != tt.wantProxy {
+					t.Errorf("DefaultClient() ProxyBase = %s, want %s", c.ProxyBase, tt.wantProxy)
+				}
+			})
 		}
-		rw.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer server.Close()
-
-	client := &Client{
-		HTTPClient: server.Client(),
-		ProxyBase:  server.URL,
-	}
-
-	if _, ok := client.latestVersion(context.Background(), "github.com/nonexistent"); ok {
-		t.Errorf("Expected latestVersion to fail on 500")
-	}
-
-	if _, ok := client.latestVersion(context.Background(), "badjson"); ok {
-		t.Errorf("Expected latestVersion to fail on bad json")
-	}
-}
-
-func TestFindLatestMajor_CurrentMajor1(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
-			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
-		} else {
-			rw.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	client := &Client{
-		HTTPClient: server.Client(),
-		ProxyBase:  server.URL,
-	}
-
-	major, path, ver := client.FindLatestMajor(context.Background(), "github.com/foo/bar", 1, 5)
-	if major != 2 {
-		t.Errorf("Expected major 2, got %d", major)
-	}
-	if path != "github.com/foo/bar/v2" {
-		t.Errorf("Expected path github.com/foo/bar/v2, got %s", path)
-	}
-	if ver != "v2.0.0" {
-		t.Errorf("Expected version v2.0.0, got %s", ver)
-	}
-}
-
-func TestDefaultClient(t *testing.T) {
-	t.Run("Default", func(t *testing.T) {
-		_ = os.Setenv("GOPROXY", "")
-		c := DefaultClient()
-		if c.ProxyBase != "https://proxy.golang.org" {
-			t.Errorf("Expected https://proxy.golang.org, got %s", c.ProxyBase)
-		}
-		_ = os.Unsetenv("GOPROXY")
 	})
 
-	t.Run("Custom", func(t *testing.T) {
-		_ = os.Setenv("GOPROXY", "https://myproxy.com")
-		c := DefaultClient()
-		if c.ProxyBase != "https://myproxy.com" {
-			t.Errorf("Expected https://myproxy.com, got %s", c.ProxyBase)
+	t.Run("CheckAndDisableFlags", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			switch req.URL.Path {
+			case "/github.com/foo/bar/@latest":
+				_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v1.5.0"})
+			case "/github.com/foo/bar/v2/@latest":
+				_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
+			case "/github.com/foo/bar/v3/@latest":
+				_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v3.1.0"})
+			default:
+				rw.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer server.Close()
+
+		tests := []struct {
+			name            string
+			modPath         string
+			version         string
+			disableMinor    bool
+			disableMajor    bool
+			wantUpdate      bool
+			wantMajor       int
+			wantMajorPath   string
+			wantMajorVer    string
+			wantMinorUpdate bool
+			wantMinorVer    string
+		}{
+			{
+				name:            "StandardMajorUpdate",
+				modPath:         "github.com/foo/bar/v2",
+				version:         "v2.0.0",
+				wantUpdate:      true,
+				wantMajor:       3,
+				wantMajorPath:   "github.com/foo/bar/v3",
+				wantMajorVer:    "v3.1.0",
+				wantMinorUpdate: false,
+			},
+			{
+				name:            "DisableMinorActive",
+				modPath:         "github.com/foo/bar",
+				version:         "v1.0.0",
+				disableMinor:    true,
+				wantUpdate:      true,
+				wantMajor:       3,
+				wantMajorPath:   "github.com/foo/bar/v3",
+				wantMajorVer:    "v3.1.0",
+				wantMinorUpdate: false,
+			},
+			{
+				name:            "DisableMajorActive",
+				modPath:         "github.com/foo/bar",
+				version:         "v1.0.0",
+				disableMajor:    true,
+				wantUpdate:      false,
+				wantMajor:       1,
+				wantMajorPath:   "github.com/foo/bar",
+				wantMinorUpdate: true,
+				wantMinorVer:    "v1.5.0",
+			},
 		}
-		_ = os.Unsetenv("GOPROXY")
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				client := &Client{
+					HTTPClient:   server.Client(),
+					ProxyBase:    server.URL,
+					DisableMinor: tt.disableMinor,
+					DisableMajor: tt.disableMajor,
+				}
+				info := client.Check(context.Background(), tt.modPath, tt.version, 5)
+
+				if info.HasUpdate != tt.wantUpdate {
+					t.Errorf("HasUpdate = %t, want %t", info.HasUpdate, tt.wantUpdate)
+				}
+				if info.LatestMajor != tt.wantMajor {
+					t.Errorf("LatestMajor = %d, want %d", info.LatestMajor, tt.wantMajor)
+				}
+				if info.LatestMajorPath != tt.wantMajorPath {
+					t.Errorf("LatestMajorPath = %q, want %q", info.LatestMajorPath, tt.wantMajorPath)
+				}
+				if info.LatestMajorVersion != tt.wantMajorVer {
+					t.Errorf("LatestMajorVersion = %q, want %q", info.LatestMajorVersion, tt.wantMajorVer)
+				}
+				if info.HasMinorUpdate != tt.wantMinorUpdate {
+					t.Errorf("HasMinorUpdate = %t, want %t", info.HasMinorUpdate, tt.wantMinorUpdate)
+				}
+				if info.LatestMinorVersion != tt.wantMinorVer {
+					t.Errorf("LatestMinorVersion = %q, want %q", info.LatestMinorVersion, tt.wantMinorVer)
+				}
+			})
+		}
 	})
 
-	t.Run("List", func(t *testing.T) {
-		_ = os.Setenv("GOPROXY", "https://proxy1.com,https://proxy2.com,direct")
-		c := DefaultClient()
-		if c.ProxyBase != "https://proxy1.com" {
-			t.Errorf("Expected https://proxy1.com, got %s", c.ProxyBase)
-		}
-		_ = os.Unsetenv("GOPROXY")
-	})
+	t.Run("LatestVersionError", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			if req.URL.Path == "/badjson/@latest" {
+				_, _ = rw.Write([]byte(`{"Version":`)) // truncated json
+				return
+			}
+			rw.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer server.Close()
 
-	t.Run("DirectOrOff", func(t *testing.T) {
-		_ = os.Setenv("GOPROXY", "direct")
-		c := DefaultClient()
-		if c.ProxyBase != "https://proxy.golang.org" {
-			t.Errorf("Expected default proxy when direct, got %s", c.ProxyBase)
-		}
-		_ = os.Unsetenv("GOPROXY")
-	})
-}
-
-func TestClient_Cache(t *testing.T) {
-	var hits int
-	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		hits++
-		if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
-			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
-		} else {
-			rw.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	client := &Client{
-		HTTPClient:  server.Client(),
-		ProxyBase:   server.URL,
-		latestCache: make(map[string]string),
-	}
-
-	// First request: Cache miss, hits should be 1
-	ver, ok := client.latestVersion(context.Background(), "github.com/foo/bar/v2")
-	if !ok || ver != "v2.0.0" {
-		t.Fatalf("Expected v2.0.0, got %s (ok=%t)", ver, ok)
-	}
-	if hits != 1 {
-		t.Errorf("Expected 1 hit to server, got %d", hits)
-	}
-
-	// Second request: Cache hit, hits should still be 1
-	ver2, ok2 := client.latestVersion(context.Background(), "github.com/foo/bar/v2")
-	if !ok2 || ver2 != "v2.0.0" {
-		t.Fatalf("Expected v2.0.0 on second call, got %s (ok=%t)", ver2, ok2)
-	}
-	if hits != 1 {
-		t.Errorf("Expected hits to remain 1 due to cache, got %d", hits)
-	}
-
-	// Third request for a nonexistent path: Cache miss on negative result, hits should be 2
-	_, ok3 := client.latestVersion(context.Background(), "github.com/nonexistent")
-	if ok3 {
-		t.Fatalf("Expected path to be nonexistent")
-	}
-	if hits != 2 {
-		t.Errorf("Expected 2 hits to server, got %d", hits)
-	}
-
-	// Fourth request for nonexistent path: Cache hit (negative caching), hits should still be 2
-	_, ok4 := client.latestVersion(context.Background(), "github.com/nonexistent")
-	if ok4 {
-		t.Fatalf("Expected path to be nonexistent on cache hit")
-	}
-	if hits != 2 {
-		t.Errorf("Expected hits to remain 2 due to negative caching, got %d", hits)
-	}
-}
-
-func TestCheck_DisableFlags(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		switch req.URL.Path {
-		case "/github.com/foo/bar/@latest":
-			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v1.5.0"})
-		case "/github.com/foo/bar/v2/@latest":
-			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.1.0"})
-		default:
-			rw.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	t.Run("DisableMinor", func(t *testing.T) {
 		client := &Client{
-			HTTPClient:   server.Client(),
-			ProxyBase:    server.URL,
-			DisableMinor: true,
+			HTTPClient: server.Client(),
+			ProxyBase:  server.URL,
 		}
-		info := client.Check(context.Background(), "github.com/foo/bar", "v1.0.0", 5)
-		if info.HasMinorUpdate {
-			t.Errorf("Expected HasMinorUpdate to be false when DisableMinor is true")
+
+		tests := []struct {
+			name    string
+			modPath string
+		}{
+			{"ServerError500", "github.com/nonexistent"},
+			{"MalformedJSON", "badjson"},
 		}
-		if info.LatestMinorVersion != "" {
-			t.Errorf("Expected LatestMinorVersion to be empty, got %s", info.LatestMinorVersion)
-		}
-		if !info.HasUpdate || info.LatestMajorVersion != "v2.1.0" {
-			t.Errorf("Expected major update to still work: %+v", info)
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				if _, ok := client.latestVersion(context.Background(), tt.modPath); ok {
+					t.Errorf("Expected latestVersion to fail for %s", tt.modPath)
+				}
+			})
 		}
 	})
 
-	t.Run("DisableMajor", func(t *testing.T) {
+	t.Run("FindLatestMajor", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
+				_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
+			} else {
+				rw.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer server.Close()
+
 		client := &Client{
-			HTTPClient:   server.Client(),
-			ProxyBase:    server.URL,
-			DisableMajor: true,
+			HTTPClient: server.Client(),
+			ProxyBase:  server.URL,
 		}
-		info := client.Check(context.Background(), "github.com/foo/bar", "v1.0.0", 5)
-		if info.HasUpdate {
-			t.Errorf("Expected HasUpdate to be false when DisableMajor is true")
+
+		major, path, ver := client.FindLatestMajor(context.Background(), "github.com/foo/bar", 1, 5, "/")
+		if major != 2 {
+			t.Errorf("Expected major 2, got %d", major)
 		}
-		if info.LatestMajorVersion != "" {
-			t.Errorf("Expected LatestMajorVersion to be empty, got %s", info.LatestMajorVersion)
+		if path != "github.com/foo/bar/v2" {
+			t.Errorf("Expected path github.com/foo/bar/v2, got %s", path)
 		}
-		if !info.HasMinorUpdate || info.LatestMinorVersion != "v1.5.0" {
-			t.Errorf("Expected minor update to still work: %+v", info)
+		if ver != "v2.0.0" {
+			t.Errorf("Expected version v2.0.0, got %s", ver)
 		}
 	})
-}
 
-func TestClient_Singleflight(t *testing.T) {
-	var hits int
-	var mu sync.Mutex
-	
-	// A delay is introduced inside the server to ensure concurrent client requests
-	// are in flight at the same time, allowing coalescing to take place.
-	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		mu.Lock()
-		hits++
-		mu.Unlock()
+	t.Run("Cache", func(t *testing.T) {
+		var hits int
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			hits++
+			if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
+				_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
+			} else {
+				rw.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer server.Close()
+
+		client := &Client{
+			HTTPClient:  server.Client(),
+			ProxyBase:   server.URL,
+			latestCache: make(map[string]string),
+		}
+
+		// First request: Cache miss, hits should be 1
+		ver, ok := client.latestVersion(context.Background(), "github.com/foo/bar/v2")
+		if !ok || ver != "v2.0.0" {
+			t.Fatalf("Expected v2.0.0, got %s (ok=%t)", ver, ok)
+		}
+		if hits != 1 {
+			t.Errorf("Expected 1 hit to server, got %d", hits)
+		}
+
+		// Second request: Cache hit, hits should still be 1
+		ver2, ok2 := client.latestVersion(context.Background(), "github.com/foo/bar/v2")
+		if !ok2 || ver2 != "v2.0.0" {
+			t.Fatalf("Expected v2.0.0 on second call, got %s (ok=%t)", ver2, ok2)
+		}
+		if hits != 1 {
+			t.Errorf("Expected hits to remain 1 due to cache, got %d", hits)
+		}
+
+		// Third request for a nonexistent path: Cache miss on negative result, hits should be 2
+		_, ok3 := client.latestVersion(context.Background(), "github.com/nonexistent")
+		if ok3 {
+			t.Fatalf("Expected path to be nonexistent")
+		}
+		if hits != 2 {
+			t.Errorf("Expected 2 hits to server, got %d", hits)
+		}
+
+		// Fourth request for nonexistent path: Cache hit (negative caching), hits should still be 2
+		_, ok4 := client.latestVersion(context.Background(), "github.com/nonexistent")
+		if ok4 {
+			t.Fatalf("Expected path to be nonexistent on cache hit")
+		}
+		if hits != 2 {
+			t.Errorf("Expected hits to remain 2 due to negative caching, got %d", hits)
+		}
+	})
+
+	t.Run("Singleflight", func(t *testing.T) {
+		var hits int
+		var mu sync.Mutex
 		
-		time.Sleep(100 * time.Millisecond)
-		if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
-			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
-		} else {
+		// A delay is introduced inside the server to ensure concurrent client requests
+		// are in flight at the same time, allowing coalescing to take place.
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			mu.Lock()
+			hits++
+			mu.Unlock()
+			
+			time.Sleep(100 * time.Millisecond)
+			if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
+				_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
+			} else {
+				rw.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer server.Close()
+
+		client := &Client{
+			HTTPClient:  server.Client(),
+			ProxyBase:   server.URL,
+			latestCache: make(map[string]string),
+		}
+
+		const concurrentRequests = 10
+		var wg sync.WaitGroup
+		wg.Add(concurrentRequests)
+
+		results := make([]string, concurrentRequests)
+		successes := make([]bool, concurrentRequests)
+
+		for i := 0; i < concurrentRequests; i++ {
+			go func(index int) {
+				defer wg.Done()
+				ver, ok := client.latestVersion(context.Background(), "github.com/foo/bar/v2")
+				results[index] = ver
+				successes[index] = ok
+			}(i)
+		}
+
+		wg.Wait()
+
+		// Assert all concurrent requests finished successfully and fetched the correct value
+		for i := 0; i < concurrentRequests; i++ {
+			if !successes[i] || results[i] != "v2.0.0" {
+				t.Errorf("Request %d failed: got %s (ok=%t), expected v2.0.0", i, results[i], successes[i])
+			}
+		}
+
+		// Assert singleflight coalesced duplicate calls so that only a single request was sent to the server
+		mu.Lock()
+		actualHits := hits
+		mu.Unlock()
+		if actualHits != 1 {
+			t.Errorf("Expected exactly 1 proxy hit due to singleflight coalescing, got %d", actualHits)
+		}
+	})
+
+	t.Run("GoPrivate", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			if strings.Contains(req.URL.Path, "private") {
+				t.Errorf("Server should not be hit for private modules, but got request to %s", req.URL.Path)
+			}
 			rw.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		client := &Client{
+			HTTPClient: server.Client(),
+			ProxyBase:  server.URL,
 		}
-	}))
-	defer server.Close()
 
-	client := &Client{
-		HTTPClient:  server.Client(),
-		ProxyBase:   server.URL,
-		latestCache: make(map[string]string),
-	}
-
-	const concurrentRequests = 10
-	var wg sync.WaitGroup
-	wg.Add(concurrentRequests)
-
-	results := make([]string, concurrentRequests)
-	successes := make([]bool, concurrentRequests)
-
-	for i := 0; i < concurrentRequests; i++ {
-		go func(index int) {
-			defer wg.Done()
-			ver, ok := client.latestVersion(context.Background(), "github.com/foo/bar/v2")
-			results[index] = ver
-			successes[index] = ok
-		}(i)
-	}
-
-	wg.Wait()
-
-	// Assert all concurrent requests finished successfully and fetched the correct value
-	for i := 0; i < concurrentRequests; i++ {
-		if !successes[i] || results[i] != "v2.0.0" {
-			t.Errorf("Request %d failed: got %s (ok=%t), expected v2.0.0", i, results[i], successes[i])
+		tests := []struct {
+			name      string
+			goprivate string
+			modPath   string
+			wantOk    bool
+		}{
+			{"WildcardMatch", "github.com/myorg/private-*,git.internal.corp", "github.com/myorg/private-repo", false},
+			{"PrefixMatch", "github.com/myorg/private-*,git.internal.corp", "git.internal.corp/foo/bar", false},
+			{"NoMatch", "github.com/myorg/private-*,git.internal.corp", "github.com/myorg/public-repo", false},
 		}
-	}
 
-	// Assert singleflight coalesced duplicate calls so that only a single request was sent to the server
-	mu.Lock()
-	actualHits := hits
-	mu.Unlock()
-	if actualHits != 1 {
-		t.Errorf("Expected exactly 1 proxy hit due to singleflight coalescing, got %d", actualHits)
-	}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Setenv("GOPRIVATE", tt.goprivate)
+				_, ok := client.latestVersion(context.Background(), tt.modPath)
+				if ok != tt.wantOk {
+					t.Errorf("latestVersion(%s) ok = %t, want %t", tt.modPath, ok, tt.wantOk)
+				}
+			})
+		}
+	})
 }
-
-

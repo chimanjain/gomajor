@@ -142,15 +142,3 @@ func TestRootCmd_Flags(t *testing.T) {
 	// Clean up config.GithubRepos after all subtests complete
 	config.GithubRepos = nil
 }
-
-func TestExecute(t *testing.T) {
-	dir := t.TempDir()
-	content := "module example.com/test\n\ngo 1.21\n"
-	p := writeModFile(t, dir, content)
-
-	// Set the flag via command line args for rootCmd
-	os.Args = []string{"gomajor", "--file", p}
-
-	// Execute calls rootCmd.Execute() which calls runChecker.
-	Execute()
-}

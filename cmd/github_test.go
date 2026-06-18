@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 )
@@ -59,6 +62,14 @@ func TestGetGithubRawURLs(t *testing.T) {
 			},
 		},
 		{
+			name:  "github link with credentials",
+			input: "https://token:x-oauth-basic@github.com/owner/repo.git",
+			want: []string{
+				"https://raw.githubusercontent.com/owner/repo/main/go.mod",
+				"https://raw.githubusercontent.com/owner/repo/master/go.mod",
+			},
+		},
+		{
 			name:  "empty",
 			input: "",
 			want:  nil,
@@ -72,5 +83,25 @@ func TestGetGithubRawURLs(t *testing.T) {
 				t.Errorf("getGithubRawURLs(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFetchGithubMod_Limit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		chunk := make([]byte, 1024*1024) // 1 MB chunk
+		for i := 0; i < 11; i++ {
+			_, _ = rw.Write(chunk)
+		}
+	}))
+	defer server.Close()
+
+	content, _, err := fetchGithubMod(context.Background(), server.Client(), server.URL)
+	if err != nil {
+		t.Fatalf("fetchGithubMod failed: %v", err)
+	}
+
+	expectedLimit := 10 * 1024 * 1024
+	if len(content) != expectedLimit {
+		t.Errorf("expected fetched content size to be capped at %d bytes, got %d", expectedLimit, len(content))
 	}
 }

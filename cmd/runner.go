@@ -4,24 +4,30 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
 
 	"github.com/chimanjain/gomajor/checker"
+	"github.com/fatih/color"
 	"go.yaml.in/yaml/v3"
 	"golang.org/x/mod/modfile"
 )
 
 // runChecker is the main execution entry point from rootCmd.Run.
-func runChecker(fileExplicit, configExplicit, outputExplicit bool) {
-	if err := runCheckerWithConfig(config, fileExplicit, configExplicit, outputExplicit); err != nil {
+func runChecker(ctx context.Context, fileExplicit, configExplicit, outputExplicit bool) {
+	if err := runCheckerWithConfig(ctx, config, fileExplicit, configExplicit, outputExplicit); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
 }
 
-func runCheckerWithConfig(cfg *Config, fileExplicit, configExplicit, outputExplicit bool) error {
+func runCheckerWithConfig(ctx context.Context, cfg *Config, fileExplicit, configExplicit, outputExplicit bool) error {
+	if cfg.NoColor {
+		color.NoColor = true
+	}
+
 	configPath := resolveConfigPath(cfg, configExplicit)
 	var results []SourceResult
 	singleMode := configPath == "" && len(cfg.GithubRepos) == 0
@@ -78,7 +84,7 @@ func runCheckerWithConfig(cfg *Config, fileExplicit, configExplicit, outputExpli
 		}
 
 		for _, localPath := range yamlCfg.Local {
-			sourceRes, err := checkLocalMod(cfg, localPath)
+			sourceRes, err := checkLocalMod(ctx, cfg, localPath)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: failed to check local go.mod at %s: %v\n", localPath, err)
 				continue
@@ -92,9 +98,9 @@ func runCheckerWithConfig(cfg *Config, fileExplicit, configExplicit, outputExpli
 		}
 
 		for _, githubPath := range yamlCfg.Github {
-			sourceRes, err := checkGithubMod(cfg, httpClient, githubPath)
+			sourceRes, err := checkGithubMod(ctx, cfg, httpClient, githubPath)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to check github go.mod at %s: %v\n", githubPath, err)
+				fmt.Fprintf(os.Stderr, "Warning: failed to check github go.mod at %s: %v\n", sanitizeURL(githubPath), err)
 				continue
 			}
 			results = append(results, sourceRes)
@@ -113,7 +119,7 @@ func runCheckerWithConfig(cfg *Config, fileExplicit, configExplicit, outputExpli
 			path = resolved
 		}
 
-		sourceRes, err := checkLocalMod(cfg, path)
+		sourceRes, err := checkLocalMod(ctx, cfg, path)
 		if err != nil {
 			return err
 		}
@@ -160,26 +166,25 @@ func resolveConfigPath(cfg *Config, configExplicit bool) string {
 }
 
 // checkLocalMod reads and checks a local go.mod file.
-func checkLocalMod(cfg *Config, path string) (SourceResult, error) {
+func checkLocalMod(ctx context.Context, cfg *Config, path string) (SourceResult, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return SourceResult{}, fmt.Errorf("reading file: %w", err)
 	}
-	return checkModContent(cfg, path, "local", content)
+	return checkModContent(ctx, cfg, path, "local", content)
 }
 
 // checkGithubMod fetches and checks a remote go.mod file from GitHub.
-func checkGithubMod(cfg *Config, httpClient *http.Client, pathOrUrl string) (SourceResult, error) {
-	ctx := context.Background()
+func checkGithubMod(ctx context.Context, cfg *Config, httpClient *http.Client, pathOrUrl string) (SourceResult, error) {
 	content, resolvedURL, err := fetchGithubMod(ctx, httpClient, pathOrUrl)
 	if err != nil {
 		return SourceResult{}, err
 	}
-	return checkModContent(cfg, resolvedURL, "github", content)
+	return checkModContent(ctx, cfg, resolvedURL, "github", content)
 }
 
 // checkModContent parses the module content, checks dependencies, and generates a SourceResult.
-func checkModContent(cfg *Config, sourceName string, sourceType string, content []byte) (SourceResult, error) {
+func checkModContent(ctx context.Context, cfg *Config, sourceName string, sourceType string, content []byte) (SourceResult, error) {
 	modFile, err := modfile.Parse(sourceName, content, nil)
 	if err != nil {
 		return SourceResult{}, fmt.Errorf("parsing go.mod: %w", err)
@@ -195,19 +200,19 @@ func checkModContent(cfg *Config, sourceName string, sourceType string, content 
 
 	var depInfos []DependencyInfo
 	if len(reqs) > 0 {
-		checked := checkDependencies(cfg, reqs)
+		checked := checkDependencies(ctx, cfg, reqs)
 		depInfos = toDependencyInfos(checked)
 	}
 
 	return SourceResult{
-		Source:       sourceName,
+		Source:       sanitizeURL(sourceName),
 		SourceType:   sourceType,
 		Dependencies: depInfos,
 	}, nil
 }
 
 // checkDependencies concurrently checks multiple module dependencies on the Go Module Proxy.
-func checkDependencies(cfg *Config, reqs []*modfile.Require) []checker.ModuleInfo {
+func checkDependencies(ctx context.Context, cfg *Config, reqs []*modfile.Require) []checker.ModuleInfo {
 	if len(reqs) == 0 {
 		return nil
 	}
@@ -222,9 +227,17 @@ func checkDependencies(cfg *Config, reqs []*modfile.Require) []checker.ModuleInf
 		wg.Add(1)
 		go func(modPath, version string) {
 			defer wg.Done()
-			sem <- struct{}{}
+			select {
+			case <-ctx.Done():
+				return
+			case sem <- struct{}{}:
+			}
 			defer func() { <-sem }()
-			info := cfg.Client.Check(context.Background(), modPath, version, cfg.MaxProbe)
+
+			if ctx.Err() != nil {
+				return
+			}
+			info := cfg.Client.Check(ctx, modPath, version, cfg.MaxProbe)
 			resultsChan <- info
 		}(req.Mod.Path, req.Mod.Version)
 	}
@@ -247,4 +260,14 @@ func checkDependencies(cfg *Config, reqs []*modfile.Require) []checker.ModuleInf
 	}
 
 	return orderedResults
+}
+
+// sanitizeURL strips credentials (usernames, passwords, or tokens) from a raw URL.
+func sanitizeURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	u.User = url.User("redacted")
+	return u.String()
 }

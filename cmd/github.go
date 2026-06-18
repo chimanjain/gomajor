@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -35,32 +36,28 @@ func getGithubRawURLs(input string) []string {
 		return []string{input}
 	}
 
-	// Full URLs that are not GitHub links (e.g. custom mock server URLs):
-	if !strings.Contains(input, "github.com/") {
-		return []string{input}
-	}
-
-	// It is a GitHub URL. Strip prefix to get the path segments.
-	trimmed := input
-	for _, prefix := range []string{"https://", "http://", "github.com/"} {
-		trimmed = strings.TrimPrefix(trimmed, prefix)
-	}
-	trimmed = strings.TrimSuffix(trimmed, "/")
-
-	parts := strings.Split(trimmed, "/")
-	if len(parts) >= 2 {
-		owner := parts[0]
-		repo := strings.TrimSuffix(parts[1], ".git")
-		if len(parts) >= 5 && parts[2] == "blob" {
-			branch := parts[3]
-			path := strings.Join(parts[4:], "/")
-			return []string{fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", owner, repo, branch, path)}
-		}
-		return []string{
-			fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/go.mod", owner, repo),
-			fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/go.mod", owner, repo),
+	// Full URLs (e.g. https://github.com/owner/repo):
+	u, err := url.Parse(input)
+	if err == nil && u.Scheme != "" && u.Host != "" {
+		if strings.Contains(u.Host, "github.com") {
+			trimmedPath := strings.TrimPrefix(strings.TrimSuffix(u.Path, "/"), "/")
+			parts := strings.Split(trimmedPath, "/")
+			if len(parts) >= 2 {
+				owner := parts[0]
+				repo := strings.TrimSuffix(parts[1], ".git")
+				if len(parts) >= 5 && parts[2] == "blob" {
+					branch := parts[3]
+					path := strings.Join(parts[4:], "/")
+					return []string{fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", owner, repo, branch, path)}
+				}
+				return []string{
+					fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/go.mod", owner, repo),
+					fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/go.mod", owner, repo),
+				}
+			}
 		}
 	}
+
 	return []string{input}
 }
 
@@ -90,7 +87,8 @@ func fetchGithubMod(ctx context.Context, client *http.Client, pathOrUrl string) 
 			continue
 		}
 
-		content, err := io.ReadAll(resp.Body)
+		limitReader := io.LimitReader(resp.Body, 10*1024*1024)
+		content, err := io.ReadAll(limitReader)
 		_ = resp.Body.Close()
 
 		if err != nil {
