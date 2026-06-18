@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/chimanjain/gomajor/utils"
 	"github.com/fatih/color"
@@ -13,7 +14,8 @@ import (
 var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func visualLen(s string) int {
-	return len(ansiRegex.ReplaceAllString(s, ""))
+	cleaned := ansiRegex.ReplaceAllString(s, "")
+	return utf8.RuneCountInString(cleaned)
 }
 
 func pad(s string, width int) string {
@@ -91,7 +93,7 @@ func printTextResults(results []SourceResult, singleMode bool) {
 		var rows [][]string
 		for _, dep := range res.Dependencies {
 			if dep.HasUpdate || dep.HasMinorUpdate {
-				basePath, _ := utils.ParseModulePath(dep.Module)
+				basePath, _, _ := utils.ParseModulePath(dep.Module)
 				rows = append(rows, formatRow(basePath, dep.CurrentVersion, dep.LatestMinorVersion, dep.HasMinorUpdate, dep.LatestMajorVersion, dep.LatestMajorPath, dep.HasUpdate))
 			}
 		}

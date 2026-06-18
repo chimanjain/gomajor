@@ -21,9 +21,10 @@ Standard commands like `go list -m -u all` are great for finding minor updates, 
 
 - 🚀 **Discover Major Upgrades:** Finds new major versions (v2, v3+) that standard Go tools miss.
 - 🌐 **Remote Scanning:** Check dependencies directly from remote GitHub repositories without cloning.
-- 🎨 **Clear Visuals:** Color-coded terminal output for quick identification of update types.
+- 🎨 **Clear Visuals:** Color-coded terminal output (supporting `--no-color` mode and precise Unicode width formatting).
 - ⚙️ **Multi-Source Config:** Check multiple local projects and remote repositories at once using a `yaml` config.
 - 📊 **CI/CD Ready:** Export dependency reports to structured JSON or YAML formats.
+- 🔒 **Security & Privacy:** Bypasses public proxies for private modules (`GOPRIVATE`) and redacts credentials/tokens in outputs.
 
 ---
 
@@ -126,11 +127,17 @@ jobs:
         run: gomajor
 ```
 
-### Environment Variables
+### Environment Variables & Security
 
-GoMajor respects the standard Go module proxy env:
+GoMajor respects standard Go environment variables to ensure compatibility, privacy, and speed:
 
 - `GOPROXY`: Specifies the Go module proxy URL (defaults to `https://proxy.golang.org`).
+- `GOPRIVATE` / `GONOPROXY`: Comma-separated list of glob patterns for private module paths. GoMajor automatically bypasses public proxy queries for matching private dependencies, preventing internal package names from leaking to public proxies and avoiding query timeouts.
+
+Additionally, GoMajor includes robust security defenses:
+
+- **Credential Sanitization:** Automatically sanitizes user credentials and tokens from remote source URLs in CLI output and exported JSON/YAML reports (replacing them with `redacted`).
+- **Remote Size Protection:** Limits remote `go.mod` downloads to a maximum of 10MB to protect against potential memory exhaustion attacks (e.g., zip bombs).
 
 ---
 

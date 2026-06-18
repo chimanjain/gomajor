@@ -41,7 +41,7 @@ available for your dependencies.`,
 		}
 		config.Client.DisableMinor = !config.Minor
 		config.Client.DisableMajor = !config.Major
-		runChecker(cmd.Flags().Changed("file"), cmd.Flags().Changed("config"), cmd.Flags().Changed("output"))
+		runChecker(cmd.Context(), cmd.Flags().Changed("file"), cmd.Flags().Changed("config"), cmd.Flags().Changed("output"))
 	},
 }
 
