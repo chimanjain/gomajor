@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/chimanjain/gomajor/checker"
@@ -14,14 +15,16 @@ type Config struct {
 	ModFilePath string
 	MaxProbe    int
 	CheckAll    bool
-	JsonOutput  bool
+	JSONOutput  bool
 	NoColor     bool
 	Minor       bool
 	Major       bool
 	Client      *checker.Client
 	ConfigPath  string
 	OutputPath  string
-	GithubRepos []string
+	GitHubRepos []string
+	Out         io.Writer
+	Err         io.Writer
 }
 
 // YAMLConfig defines the structure for the configuration YAML file.
@@ -74,19 +77,19 @@ func toDependencyInfos(results []checker.ModuleInfo) []DependencyInfo {
 
 func writeReport(outputPath string, isJSON bool, results []SourceResult) error {
 	outputData := YAMLOutput{Results: results}
-	var bytes []byte
+	var data []byte
 	var err error
 	formatName := "YAML"
 
 	if isJSON {
 		formatName = "JSON"
-		bytes, err = json.MarshalIndent(outputData, "", "  ")
+		data, err = json.MarshalIndent(outputData, "", "  ")
 	} else {
-		bytes, err = yaml.Marshal(outputData)
+		data, err = yaml.Marshal(outputData)
 	}
 
 	if err == nil {
-		err = os.WriteFile(outputPath, bytes, 0644)
+		err = os.WriteFile(outputPath, data, 0o644)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to write %s output: %w", formatName, err)

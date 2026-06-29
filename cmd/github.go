@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
+	"time"
 )
 
 // getGithubRawURLs normalizes a GitHub path or URL into candidate raw URL(s).
@@ -68,22 +70,67 @@ func fetchGithubMod(ctx context.Context, client *http.Client, pathOrUrl string) 
 		return nil, "", fmt.Errorf("invalid github repository format: %s", pathOrUrl)
 	}
 
+	var token string
+	if u, err := url.Parse(pathOrUrl); err == nil && u.User != nil {
+		if passwd, ok := u.User.Password(); ok {
+			token = passwd
+		} else {
+			token = u.User.Username()
+		}
+	}
+	if token == "" {
+		token = os.Getenv("GITHUB_TOKEN")
+	}
+	if token == "" {
+		token = os.Getenv("GITHUB_PAT")
+	}
+
 	var lastErr error
 	for _, u := range urls {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			lastErr = err
-			continue
+		var resp *http.Response
+		delay := 100 * time.Millisecond
+
+		for attempt := 0; attempt < 3; attempt++ {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+			if err != nil {
+				lastErr = err
+				break
+			}
+
+			if token != "" {
+				if strings.Contains(token, " ") {
+					req.Header.Set("Authorization", token)
+				} else {
+					req.Header.Set("Authorization", "token "+token)
+				}
+			}
+
+			resp, lastErr = client.Do(req)
+			if lastErr == nil {
+				if resp.StatusCode == http.StatusOK {
+					break
+				}
+				// Terminal errors (e.g. 404, 401, 403) - do not retry this URL
+				if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode < 500 {
+					_ = resp.Body.Close()
+					lastErr = fmt.Errorf("HTTP status %d: %s", resp.StatusCode, resp.Status)
+					break
+				}
+				_ = resp.Body.Close()
+				lastErr = fmt.Errorf("HTTP status %d: %s", resp.StatusCode, resp.Status)
+			}
+
+			if attempt < 2 {
+				select {
+				case <-ctx.Done():
+					return nil, "", ctx.Err()
+				case <-time.After(delay):
+					delay *= 2
+				}
+			}
 		}
 
-		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("HTTP status %d: %s", resp.StatusCode, resp.Status)
-			_ = resp.Body.Close()
+		if lastErr != nil || resp == nil || resp.StatusCode != http.StatusOK {
 			continue
 		}
 

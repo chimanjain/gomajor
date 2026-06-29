@@ -3,7 +3,6 @@ package cmd
 import (
 	"bytes"
 	"io"
-	"os"
 	"strings"
 	"testing"
 
@@ -74,7 +73,7 @@ func TestFormatter(t *testing.T) {
 
 	t.Run("PrintTable_Empty", func(t *testing.T) {
 		// Just ensure it doesn't panic
-		printTable("", nil)
+		printTable(io.Discard, "", nil)
 	})
 
 	t.Run("PrintTable_Rows", func(t *testing.T) {
@@ -82,17 +81,8 @@ func TestFormatter(t *testing.T) {
 			{"mod", "v1.0.0", "v1.1.0", "v2.0.0", "mod/v2"},
 		}
 
-		old := os.Stdout
-		r, w, _ := os.Pipe()
-		os.Stdout = w
-
-		printTable("  ", rows)
-
-		_ = w.Close()
-		os.Stdout = old
-
 		var buf bytes.Buffer
-		_, _ = io.Copy(&buf, r)
+		printTable(&buf, "  ", rows)
 		out := buf.String()
 
 		if !strings.Contains(out, "MODULE") || !strings.Contains(out, "mod/v2") {

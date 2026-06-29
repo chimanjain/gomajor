@@ -10,7 +10,7 @@ import (
 func writeModFile(t *testing.T, dir, content string) string {
 	t.Helper()
 	p := filepath.Join(dir, "go.mod")
-	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 		t.Fatalf("writeModFile: %v", err)
 	}
 	return p
@@ -40,7 +40,7 @@ func TestResolveModFile(t *testing.T) {
 
 			if tt.createMod {
 				goModPath := filepath.Join(dir, "go.mod")
-				if err := os.WriteFile(goModPath, []byte("module example.com/test\n\ngo 1.21\n"), 0644); err != nil {
+				if err := os.WriteFile(goModPath, []byte("module example.com/test\n\ngo 1.21\n"), 0o644); err != nil {
 					t.Fatalf("failed to create temp go.mod: %v", err)
 				}
 			}
@@ -103,7 +103,7 @@ func TestRootCmd_Flags(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Clear/reset state before run
-			config.GithubRepos = nil
+			config.GitHubRepos = nil
 			if err := rootCmd.Flags().Set("github", ""); err != nil {
 				t.Fatalf("failed to reset flag: %v", err)
 			}
@@ -127,18 +127,18 @@ func TestRootCmd_Flags(t *testing.T) {
 			}
 
 			if !tt.wantErr {
-				if len(config.GithubRepos) != len(tt.wantRepos) {
-					t.Fatalf("len(config.GithubRepos) = %d, want %d", len(config.GithubRepos), len(tt.wantRepos))
+				if len(config.GitHubRepos) != len(tt.wantRepos) {
+					t.Fatalf("len(config.GitHubRepos) = %d, want %d", len(config.GitHubRepos), len(tt.wantRepos))
 				}
-				for i, v := range config.GithubRepos {
+				for i, v := range config.GitHubRepos {
 					if v != tt.wantRepos[i] {
-						t.Errorf("config.GithubRepos[%d] = %q, want %q", i, v, tt.wantRepos[i])
+						t.Errorf("config.GitHubRepos[%d] = %q, want %q", i, v, tt.wantRepos[i])
 					}
 				}
 			}
 		})
 	}
 
-	// Clean up config.GithubRepos after all subtests complete
-	config.GithubRepos = nil
+	// Clean up config.GitHubRepos after all subtests complete
+	config.GitHubRepos = nil
 }

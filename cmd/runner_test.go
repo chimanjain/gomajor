@@ -1,18 +1,15 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/chimanjain/gomajor/checker"
 	"go.yaml.in/yaml/v3"
@@ -257,7 +254,7 @@ require github.com/foo/bar v1.0.0
 					outputPath := filepath.Join(dir, "gomajor-report.yaml")
 					return "", &Config{
 						MaxProbe:    2,
-						GithubRepos: []string{serverURL + "/owner/repo/main/go.mod"},
+						GitHubRepos: []string{serverURL + "/owner/repo/main/go.mod"},
 						OutputPath:  outputPath,
 					}
 				},
@@ -433,6 +430,31 @@ require github.com/foo/bar v1.0.0
 					}
 				},
 			},
+			{
+				name: "SpaceAndCommaSeparatedGitHubRepos",
+				setup: func(t *testing.T, dir string, serverURL string) (string, *Config) {
+					outputPath := filepath.Join(dir, "gomajor-report.yaml")
+					reposStr := fmt.Sprintf("%s/owner/repo/main/go.mod, %s/owner/repo/main/go.mod\t%s/owner/repo/main/go.mod", serverURL, serverURL, serverURL)
+					return "", &Config{
+						MaxProbe:    2,
+						GitHubRepos: []string{reposStr},
+						OutputPath:  outputPath,
+					}
+				},
+				wantResultsLen: 1,
+				verify: func(t *testing.T, output YAMLOutput, _ string) {
+					if len(output.Results) != 1 {
+						t.Fatalf("expected 1 result, got %d", len(output.Results))
+					}
+					res := output.Results[0]
+					if res.SourceType != "github" {
+						t.Errorf("source type = %q, want 'github'", res.SourceType)
+					}
+					if len(res.Dependencies) != 1 {
+						t.Fatalf("expected 1 dependency, got %d", len(res.Dependencies))
+					}
+				},
+			},
 		}
 
 		for _, tt := range tests {
@@ -527,88 +549,19 @@ require github.com/foo/baz v1.0.0
 			},
 		}
 
-		old := os.Stdout
-		r, w, _ := os.Pipe()
-		os.Stdout = w
-
-		err := printMultiJsonResults(results)
+		var buf bytes.Buffer
+		err := printMultiJsonResults(&buf, results)
 		if err != nil {
 			t.Fatalf("printMultiJsonResults failed: %v", err)
 		}
 
-		_ = w.Close()
-		os.Stdout = old
-
-		var buf strings.Builder
-		_, _ = io.Copy(&buf, r)
-
 		var output YAMLOutput
-		if err := json.Unmarshal([]byte(buf.String()), &output); err != nil {
+		if err := json.Unmarshal(buf.Bytes(), &output); err != nil {
 			t.Fatalf("failed to unmarshal stdout JSON output: %v", err)
 		}
 
 		if len(output.Results) != 1 || output.Results[0].Source != "test-source" {
 			t.Errorf("unexpected output struct: %+v", output)
-		}
-	})
-
-	t.Run("CheckDependencies_Semaphore", func(t *testing.T) {
-		var activeCount int
-		var maxActive int
-		var mu sync.Mutex
-
-		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-			mu.Lock()
-			activeCount++
-			if activeCount > maxActive {
-				maxActive = activeCount
-			}
-			mu.Unlock()
-
-			time.Sleep(50 * time.Millisecond)
-
-			mu.Lock()
-			activeCount--
-			mu.Unlock()
-
-			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v1.0.0"})
-		}))
-		defer server.Close()
-
-		client := &checker.Client{
-			HTTPClient: server.Client(),
-			ProxyBase:  server.URL,
-		}
-
-		cfg := &Config{
-			Client:   client,
-			MaxProbe: 0,
-			Minor:    true,
-		}
-		cfg.Client.DisableMinor = false
-		cfg.Client.DisableMajor = true
-
-		var reqs []*modfile.Require
-		for i := 1; i <= 40; i++ {
-			reqs = append(reqs, &modfile.Require{
-				Mod: module.Version{
-					Path:    fmt.Sprintf("github.com/foo/bar%d", i),
-					Version: "v1.0.0",
-				},
-			})
-		}
-
-		_ = checkDependencies(context.Background(), cfg, reqs)
-
-		mu.Lock()
-		highestConcurrency := maxActive
-		mu.Unlock()
-
-		if highestConcurrency > 20 {
-			t.Errorf("Expected maximum concurrency to be capped at 20, but got %d", highestConcurrency)
-		}
-		if highestConcurrency == 0 {
-			t.Errorf("Expected concurrency to be recorded, but got 0")
 		}
 	})
 

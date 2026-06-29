@@ -29,6 +29,7 @@ type Client struct {
 	cacheMu     sync.RWMutex
 	latestCache map[string]string // maps modPath to latest version found
 	sfGroup     singleflight.Group
+	sem         chan struct{}
 }
 
 // DefaultClient returns a client with standard settings.
@@ -57,14 +58,56 @@ func DefaultClient() *Client {
 		},
 		ProxyBase:   strings.TrimRight(proxy, "/"),
 		latestCache: make(map[string]string),
+		sem:         make(chan struct{}, 20),
 	}
 }
 
-var defaultClient = DefaultClient()
+func (c *Client) initSem() chan struct{} {
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+	if c.sem == nil {
+		c.sem = make(chan struct{}, 20)
+	}
+	return c.sem
+}
+
+func (c *Client) getSem() chan struct{} {
+	c.cacheMu.RLock()
+	sem := c.sem
+	c.cacheMu.RUnlock()
+	if sem != nil {
+		return sem
+	}
+	return c.initSem()
+}
+
+var (
+	defaultClient     *Client
+	defaultClientOnce sync.Once
+)
+
+func getDefaultClient() *Client {
+	defaultClientOnce.Do(func() {
+		defaultClient = DefaultClient()
+	})
+	return defaultClient
+}
 
 // ProxyBase is deprecated; use Client.ProxyBase instead.
 // Kept for backward compatibility with tests.
-var ProxyBase = defaultClient.ProxyBase
+var ProxyBase = func() string {
+	proxy := os.Getenv("GOPROXY")
+	if proxy == "" {
+		proxy = "https://proxy.golang.org"
+	}
+	if idx := strings.Index(proxy, ","); idx != -1 {
+		proxy = proxy[:idx]
+	}
+	if proxy == "direct" || proxy == "off" {
+		proxy = "https://proxy.golang.org"
+	}
+	return strings.TrimRight(proxy, "/")
+}()
 
 // ModuleInfo holds information about a module and any discovered major update.
 type ModuleInfo struct {
@@ -143,17 +186,54 @@ func (c *Client) latestVersion(ctx context.Context, modPath string) (string, boo
 
 // fetchLatestVersion performs the actual HTTP request to the Go proxy.
 func (c *Client) fetchLatestVersion(ctx context.Context, modPath string) (string, bool) {
+	sem := c.getSem()
+	select {
+	case sem <- struct{}{}:
+	case <-ctx.Done():
+		return "", false
+	}
+	defer func() { <-sem }()
+
 	escaped, err := utils.EscapePath(modPath)
 	if err != nil {
 		return "", false
 	}
 	url := fmt.Sprintf("%s/%s/@latest", c.ProxyBase, escaped)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return "", false
+
+	var resp *http.Response
+	var lastErr error
+	delay := 100 * time.Millisecond
+
+	for attempt := 0; attempt < 3; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return "", false
+		}
+
+		resp, lastErr = c.HTTPClient.Do(req)
+		if lastErr == nil {
+			if resp.StatusCode == http.StatusOK {
+				break
+			}
+			// Do not retry 404/401/403 errors, but retry 429 and 5xx
+			if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode < 500 {
+				break
+			}
+			_ = resp.Body.Close()
+			lastErr = fmt.Errorf("HTTP status %d: %s", resp.StatusCode, resp.Status)
+		}
+
+		if attempt < 2 {
+			select {
+			case <-ctx.Done():
+				return "", false
+			case <-time.After(delay):
+				delay *= 2
+			}
+		}
 	}
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
+
+	if lastErr != nil || resp == nil || resp.StatusCode != http.StatusOK {
 		return "", false
 	}
 	defer func() {
@@ -233,5 +313,5 @@ func (c *Client) Check(ctx context.Context, modPath, modVersion string, maxProbe
 
 // Check is a convenience function that uses the default client.
 func Check(modPath, modVersion string, maxProbe int) ModuleInfo {
-	return defaultClient.Check(context.Background(), modPath, modVersion, maxProbe)
+	return getDefaultClient().Check(context.Background(), modPath, modVersion, maxProbe)
 }

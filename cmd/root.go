@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 
 	"github.com/chimanjain/gomajor/checker"
-	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
 
@@ -16,14 +15,16 @@ func DefaultConfig() *Config {
 		ModFilePath: "",
 		MaxProbe:    5,
 		CheckAll:    false,
-		JsonOutput:  false,
+		JSONOutput:  false,
 		NoColor:     false,
 		Minor:       true,
 		Major:       true,
 		Client:      checker.DefaultClient(),
 		ConfigPath:  "",
 		OutputPath:  "",
-		GithubRepos: nil,
+		GitHubRepos: nil,
+		Out:         os.Stdout,
+		Err:         os.Stderr,
 	}
 }
 
@@ -36,9 +37,6 @@ var rootCmd = &cobra.Command{
 to discover if there are newer major versions (e.g. v2 -> v3) 
 available for your dependencies.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		if config.NoColor {
-			color.NoColor = true
-		}
 		config.Client.DisableMinor = !config.Minor
 		config.Client.DisableMajor = !config.Major
 		runChecker(cmd.Context(), cmd.Flags().Changed("file"), cmd.Flags().Changed("config"), cmd.Flags().Changed("output"))
@@ -56,13 +54,13 @@ func init() {
 	rootCmd.Flags().StringVarP(&config.ModFilePath, "file", "f", "", "Path to the go.mod file (default: auto-detect in current directory or binary directory)")
 	rootCmd.Flags().IntVarP(&config.MaxProbe, "max-probe", "m", 5, "Maximum number of subsequent major versions to probe for")
 	rootCmd.Flags().BoolVarP(&config.CheckAll, "all", "a", false, "Check all dependencies, including indirect ones (by default only direct dependencies are checked)")
-	rootCmd.Flags().BoolVar(&config.JsonOutput, "json", false, "Output results in JSON format")
+	rootCmd.Flags().BoolVar(&config.JSONOutput, "json", false, "Output results in JSON format")
 	rootCmd.Flags().BoolVar(&config.NoColor, "no-color", false, "Disable color output")
 	rootCmd.Flags().BoolVar(&config.Minor, "minor", true, "Check for minor updates within the current major version")
 	rootCmd.Flags().BoolVar(&config.Major, "major", true, "Check for major version upgrades")
 	rootCmd.Flags().StringVarP(&config.ConfigPath, "config", "c", "", "Path to the YAML configuration file (default: auto-detects 'gomajor.yaml' in current directory)")
 	rootCmd.Flags().StringVarP(&config.OutputPath, "output", "o", "", "Path to save results in YAML or JSON format (defaults to 'gomajor-report.yaml' or 'gomajor-report.json' if outputting to a file, otherwise printed to terminal)")
-	rootCmd.Flags().StringSliceVarP(&config.GithubRepos, "github", "g", nil, "Check GitHub repositories directly (comma-separated)")
+	rootCmd.Flags().StringSliceVarP(&config.GitHubRepos, "github", "g", nil, "Check GitHub repositories directly (comma or space-separated)")
 }
 
 // resolveModFile returns the path to use for go.mod, auto-discovering it when
