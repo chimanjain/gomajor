@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"golang.org/x/mod/module"
 )
 
 // majorSuffixRe matches a trailing major-version segment in a module path.
@@ -46,18 +48,5 @@ func NextMajorPath(basePath string, major int, sep string) string {
 
 // EscapePath applies Go module path escaping (uppercase letters become !lowercase).
 func EscapePath(modPath string) (string, error) {
-	var sb strings.Builder
-	for _, r := range modPath {
-		if r >= 'A' && r <= 'Z' {
-			sb.WriteByte('!')
-			sb.WriteRune(r + 32)
-		} else {
-			sb.WriteRune(r)
-		}
-	}
-	// Validate the path is not empty.
-	if sb.Len() == 0 {
-		return "", fmt.Errorf("empty module path")
-	}
-	return sb.String(), nil
+	return module.EscapePath(modPath)
 }

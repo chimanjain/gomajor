@@ -3,6 +3,7 @@ package checker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -41,21 +42,24 @@ func TestClient(t *testing.T) {
 		}
 	})
 
-	t.Run("CheckAndDisableFlags", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-			switch req.URL.Path {
-			case "/github.com/foo/bar/@latest":
-				_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v1.5.0"})
-			case "/github.com/foo/bar/v2/@latest":
-				_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
-			case "/github.com/foo/bar/v3/@latest":
-				_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v3.1.0"})
-			default:
-				rw.WriteHeader(http.StatusNotFound)
-			}
-		}))
-		defer server.Close()
+	// Reusable unified Mock Proxy Server for functional subtests
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/github.com/foo/bar/@latest":
+			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v1.5.0"})
+		case "/github.com/foo/bar/v2/@latest":
+			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
+		case "/github.com/foo/bar/v3/@latest":
+			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v3.1.0"})
+		case "/badjson/@latest":
+			_, _ = rw.Write([]byte(`{"Version":`)) // malformed JSON
+		default:
+			rw.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
 
+	t.Run("CheckAndDisableFlags", func(t *testing.T) {
 		tests := []struct {
 			name            string
 			modPath         string
@@ -136,15 +140,6 @@ func TestClient(t *testing.T) {
 	})
 
 	t.Run("LatestVersionError", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-			if req.URL.Path == "/badjson/@latest" {
-				_, _ = rw.Write([]byte(`{"Version":`)) // truncated json
-				return
-			}
-			rw.WriteHeader(http.StatusInternalServerError)
-		}))
-		defer server.Close()
-
 		client := &Client{
 			HTTPClient: server.Client(),
 			ProxyBase:  server.URL,
@@ -168,15 +163,6 @@ func TestClient(t *testing.T) {
 	})
 
 	t.Run("FindLatestMajor", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-			if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
-				_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
-			} else {
-				rw.WriteHeader(http.StatusNotFound)
-			}
-		}))
-		defer server.Close()
-
 		client := &Client{
 			HTTPClient: server.Client(),
 			ProxyBase:  server.URL,
@@ -252,14 +238,14 @@ func TestClient(t *testing.T) {
 	t.Run("Singleflight", func(t *testing.T) {
 		var hits int
 		var mu sync.Mutex
-		
+
 		// A delay is introduced inside the server to ensure concurrent client requests
 		// are in flight at the same time, allowing coalescing to take place.
 		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 			mu.Lock()
 			hits++
 			mu.Unlock()
-			
+
 			time.Sleep(100 * time.Millisecond)
 			if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
 				_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
@@ -282,7 +268,7 @@ func TestClient(t *testing.T) {
 		results := make([]string, concurrentRequests)
 		successes := make([]bool, concurrentRequests)
 
-		for i := 0; i < concurrentRequests; i++ {
+		for i := range concurrentRequests {
 			go func(index int) {
 				defer wg.Done()
 				ver, ok := client.latestVersion(context.Background(), "github.com/foo/bar/v2")
@@ -294,7 +280,7 @@ func TestClient(t *testing.T) {
 		wg.Wait()
 
 		// Assert all concurrent requests finished successfully and fetched the correct value
-		for i := 0; i < concurrentRequests; i++ {
+		for i := range concurrentRequests {
 			if !successes[i] || results[i] != "v2.0.0" {
 				t.Errorf("Request %d failed: got %s (ok=%t), expected v2.0.0", i, results[i], successes[i])
 			}
@@ -344,4 +330,104 @@ func TestClient(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestClient_Retry(t *testing.T) {
+	t.Run("TransientErrorsRetried", func(t *testing.T) {
+		attempts := 0
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			attempts++
+			if attempts < 2 {
+				rw.WriteHeader(http.StatusBadGateway) // 502 Bad Gateway
+				return
+			}
+			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v1.2.3"})
+		}))
+		defer server.Close()
+
+		client := &Client{
+			HTTPClient:  server.Client(),
+			ProxyBase:   server.URL,
+			latestCache: make(map[string]string),
+		}
+
+		ver, ok := client.latestVersion(context.Background(), "github.com/foo/bar")
+		if !ok || ver != "v1.2.3" {
+			t.Errorf("latestVersion failed: got %s (ok=%t), expected v1.2.3", ver, ok)
+		}
+		if attempts != 2 {
+			t.Errorf("expected 2 attempts, got %d", attempts)
+		}
+	})
+
+	t.Run("TerminalErrorImmediateFail", func(t *testing.T) {
+		attempts := 0
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			attempts++
+			rw.WriteHeader(http.StatusNotFound) // 404
+		}))
+		defer server.Close()
+
+		client := &Client{
+			HTTPClient:  server.Client(),
+			ProxyBase:   server.URL,
+			latestCache: make(map[string]string),
+		}
+
+		_, ok := client.latestVersion(context.Background(), "github.com/foo/bar")
+		if ok {
+			t.Errorf("expected latestVersion to fail on 404")
+		}
+		if attempts != 1 {
+			t.Errorf("expected exactly 1 attempt for 404 terminal error, got %d", attempts)
+		}
+	})
+}
+
+func TestClient_Concurrency(t *testing.T) {
+	var inFlight int
+	var maxInFlight int
+	var mu sync.Mutex
+
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		mu.Lock()
+		inFlight++
+		if inFlight > maxInFlight {
+			maxInFlight = inFlight
+		}
+		mu.Unlock()
+
+		time.Sleep(50 * time.Millisecond)
+
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+
+		_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v1.0.0"})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		HTTPClient:  server.Client(),
+		ProxyBase:   server.URL,
+		latestCache: make(map[string]string),
+		sem:         make(chan struct{}, 3),
+	}
+
+	const totalRequests = 10
+	var wg sync.WaitGroup
+	wg.Add(totalRequests)
+
+	for i := 0; i < totalRequests; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			_, _ = client.fetchLatestVersion(context.Background(), fmt.Sprintf("github.com/foo/bar%d", idx))
+		}(i)
+	}
+
+	wg.Wait()
+
+	if maxInFlight > 3 {
+		t.Errorf("expected max in-flight requests to be <= 3, got %d", maxInFlight)
+	}
 }

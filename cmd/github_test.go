@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -104,4 +106,104 @@ func TestFetchGithubMod_Limit(t *testing.T) {
 	if len(content) != expectedLimit {
 		t.Errorf("expected fetched content size to be capped at %d bytes, got %d", expectedLimit, len(content))
 	}
+}
+
+func TestFetchGithubMod_Auth(t *testing.T) {
+	t.Run("TokenFromEnv", func(t *testing.T) {
+		token := "my-secret-token-from-env"
+		t.Setenv("GITHUB_TOKEN", token)
+
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			auth := req.Header.Get("Authorization")
+			if auth != "token "+token {
+				rw.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			rw.WriteHeader(http.StatusOK)
+			_, _ = rw.Write([]byte("module my-module\n"))
+		}))
+		defer server.Close()
+
+		content, _, err := fetchGithubMod(context.Background(), server.Client(), server.URL)
+		if err != nil {
+			t.Fatalf("fetchGithubMod failed: %v", err)
+		}
+		if !strings.Contains(string(content), "my-module") {
+			t.Errorf("unexpected content: %s", string(content))
+		}
+	})
+
+	t.Run("TokenFromURL", func(t *testing.T) {
+		token := "token-from-url"
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			auth := req.Header.Get("Authorization")
+			if auth != "token "+token {
+				rw.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			rw.WriteHeader(http.StatusOK)
+			_, _ = rw.Write([]byte("module url-module\n"))
+		}))
+		defer server.Close()
+
+		rawURL := server.URL
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			t.Fatalf("url parse failed: %v", err)
+		}
+		parsed.User = url.UserPassword("", token)
+		authURL := parsed.String()
+
+		content, _, err := fetchGithubMod(context.Background(), server.Client(), authURL)
+		if err != nil {
+			t.Fatalf("fetchGithubMod failed: %v", err)
+		}
+		if !strings.Contains(string(content), "url-module") {
+			t.Errorf("unexpected content: %s", string(content))
+		}
+	})
+}
+
+func TestFetchGithubMod_Retries(t *testing.T) {
+	t.Run("TransientRetriesThenSuccess", func(t *testing.T) {
+		attempts := 0
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			attempts++
+			if attempts < 2 {
+				rw.WriteHeader(http.StatusBadGateway) // transient 502
+				return
+			}
+			rw.WriteHeader(http.StatusOK)
+			_, _ = rw.Write([]byte("module retried\n"))
+		}))
+		defer server.Close()
+
+		content, _, err := fetchGithubMod(context.Background(), server.Client(), server.URL)
+		if err != nil {
+			t.Fatalf("fetchGithubMod failed: %v", err)
+		}
+		if attempts != 2 {
+			t.Errorf("expected 2 attempts, got %d", attempts)
+		}
+		if !strings.Contains(string(content), "retried") {
+			t.Errorf("unexpected content: %s", string(content))
+		}
+	})
+
+	t.Run("TerminalErrorImmediateFail", func(t *testing.T) {
+		attempts := 0
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			attempts++
+			rw.WriteHeader(http.StatusNotFound) // terminal 404
+		}))
+		defer server.Close()
+
+		_, _, err := fetchGithubMod(context.Background(), server.Client(), server.URL)
+		if err == nil {
+			t.Fatal("expected fetchGithubMod to fail")
+		}
+		if attempts != 1 {
+			t.Errorf("expected exactly 1 attempt for 404 terminal error, got %d", attempts)
+		}
+	})
 }

@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -40,7 +41,7 @@ func formatRow(mod, current, minorVer string, hasMinor bool, majorVer, majorPath
 	return []string{color.CyanString(mod), current, minor, major, newPath}
 }
 
-func printTable(indent string, rows [][]string) {
+func printTable(w io.Writer, indent string, rows [][]string) {
 	if len(rows) == 0 {
 		return
 	}
@@ -49,16 +50,17 @@ func printTable(indent string, rows [][]string) {
 	for col := 0; col < 4; col++ {
 		maxW := visualLen(header[col])
 		for _, row := range rows {
-			w := visualLen(row[col])
-			if w > maxW {
-				maxW = w
+			wCol := visualLen(row[col])
+			if wCol > maxW {
+				maxW = wCol
 			}
 		}
 		widths[col] = maxW + 3
 	}
 
 	headerColor := color.New(color.Bold, color.Underline).SprintFunc()
-	fmt.Printf("%s%s%s%s%s%s\n",
+	_, _ = fmt.Fprintf(
+		w, "%s%s%s%s%s%s\n",
 		indent,
 		headerColor(pad(header[0], widths[0])),
 		headerColor(pad(header[1], widths[1])),
@@ -68,7 +70,8 @@ func printTable(indent string, rows [][]string) {
 	)
 
 	for _, row := range rows {
-		fmt.Printf("%s%s%s%s%s%s\n",
+		_, _ = fmt.Fprintf(
+			w, "%s%s%s%s%s%s\n",
 			indent,
 			pad(row[0], widths[0]),
 			pad(row[1], widths[1]),
@@ -79,14 +82,14 @@ func printTable(indent string, rows [][]string) {
 	}
 }
 
-func printTextResults(results []SourceResult, singleMode bool) {
+func printTextResults(w io.Writer, results []SourceResult, singleMode bool) {
 	if singleMode {
 		if len(results) == 0 {
 			return
 		}
 		res := results[0]
 		if len(res.Dependencies) == 0 {
-			fmt.Println("No matching dependencies found in", res.Source)
+			_, _ = fmt.Fprintln(w, "No matching dependencies found in", res.Source)
 			return
 		}
 
@@ -99,19 +102,19 @@ func printTextResults(results []SourceResult, singleMode bool) {
 		}
 
 		if len(rows) == 0 {
-			fmt.Println(color.GreenString("✔ All checked dependencies are on their latest major versions."))
+			_, _ = fmt.Fprintln(w, color.GreenString("✔ All checked dependencies are on their latest major versions."))
 			return
 		}
-		printTable("", rows)
-		fmt.Println()
+		printTable(w, "", rows)
+		_, _ = fmt.Fprintln(w)
 	} else {
 		for i, res := range results {
 			if i > 0 {
-				fmt.Println()
+				_, _ = fmt.Fprintln(w)
 			}
-			fmt.Printf("%s (%s)\n", color.HiCyanString(res.Source), color.HiBlackString(res.SourceType))
+			_, _ = fmt.Fprintf(w, "%s (%s)\n", color.HiCyanString(res.Source), color.HiBlackString(res.SourceType))
 			if len(res.Dependencies) == 0 {
-				fmt.Println("  No matching dependencies found.")
+				_, _ = fmt.Fprintln(w, "  No matching dependencies found.")
 				continue
 			}
 
@@ -123,29 +126,29 @@ func printTextResults(results []SourceResult, singleMode bool) {
 			}
 
 			if len(rows) == 0 {
-				fmt.Println(color.GreenString("  ✔ All checked dependencies are on their latest major versions."))
+				_, _ = fmt.Fprintln(w, color.GreenString("  ✔ All checked dependencies are on their latest major versions."))
 				continue
 			}
 
-			printTable("  ", rows)
+			printTable(w, "  ", rows)
 		}
 	}
 }
 
-func printAnalysisHeader(count int, checkAll bool, path string) {
+func printAnalysisHeader(w io.Writer, count int, checkAll bool, path string) {
 	msg := fmt.Sprintf("Analyzing %d direct dependencies", count)
 	if checkAll {
 		msg = fmt.Sprintf("Analyzing %d dependencies (direct and indirect)", count)
 	}
-	fmt.Printf("%s from %s...\n\n", color.HiCyanString(msg), color.HiBlackString(path))
+	_, _ = fmt.Fprintf(w, "%s from %s...\n\n", color.HiCyanString(msg), color.HiBlackString(path))
 }
 
-func printMultiJsonResults(results []SourceResult) error {
+func printMultiJsonResults(w io.Writer, results []SourceResult) error {
 	outputData := YAMLOutput{Results: results}
 	data, err := json.MarshalIndent(outputData, "", "  ")
 	if err != nil {
 		return err
 	}
-	fmt.Println(string(data))
+	_, _ = fmt.Fprintln(w, string(data))
 	return nil
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/chimanjain/gomajor/checker"
 	"github.com/fatih/color"
+	"github.com/mattn/go-isatty"
 	"go.yaml.in/yaml/v3"
 	"golang.org/x/mod/modfile"
 )
@@ -18,19 +19,38 @@ import (
 // runChecker is the main execution entry point from rootCmd.Run.
 func runChecker(ctx context.Context, fileExplicit, configExplicit, outputExplicit bool) {
 	if err := runCheckerWithConfig(ctx, config, fileExplicit, configExplicit, outputExplicit); err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
+		_, _ = fmt.Fprintln(config.Err, "Error:", err)
 		os.Exit(1)
 	}
 }
 
 func runCheckerWithConfig(ctx context.Context, cfg *Config, fileExplicit, configExplicit, outputExplicit bool) error {
+	origNoColor := color.NoColor
+	defer func() {
+		color.NoColor = origNoColor
+	}()
 	if cfg.NoColor {
 		color.NoColor = true
 	}
 
+	// Normalize/split GitHub repos if they contain spaces or commas
+	var normalizedGitHubRepos []string
+	for _, repo := range cfg.GitHubRepos {
+		parts := strings.FieldsFunc(repo, func(r rune) bool {
+			return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+		})
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				normalizedGitHubRepos = append(normalizedGitHubRepos, part)
+			}
+		}
+	}
+	cfg.GitHubRepos = normalizedGitHubRepos
+
 	configPath := resolveConfigPath(cfg, configExplicit)
 	var results []SourceResult
-	singleMode := configPath == "" && len(cfg.GithubRepos) == 0
+	singleMode := configPath == "" && len(cfg.GitHubRepos) == 0
 
 	if !singleMode {
 		var yamlCfg YAMLConfig
@@ -53,8 +73,8 @@ func runCheckerWithConfig(ctx context.Context, cfg *Config, fileExplicit, config
 			cfg.Client.DisableMajor = !cfg.Major
 		}
 
-		if len(cfg.GithubRepos) > 0 {
-			yamlCfg.Github = append(yamlCfg.Github, cfg.GithubRepos...)
+		if len(cfg.GitHubRepos) > 0 {
+			yamlCfg.Github = append(yamlCfg.Github, cfg.GitHubRepos...)
 		}
 
 		// Deduplicate local paths
@@ -68,13 +88,19 @@ func runCheckerWithConfig(ctx context.Context, cfg *Config, fileExplicit, config
 		}
 		yamlCfg.Local = uniqueLocal
 
-		// Deduplicate remote GitHub paths
+		// Deduplicate remote GitHub paths (handling potential space or comma separated lists)
 		seenGithub := make(map[string]bool)
 		var uniqueGithub []string
 		for _, p := range yamlCfg.Github {
-			if !seenGithub[p] {
-				seenGithub[p] = true
-				uniqueGithub = append(uniqueGithub, p)
+			parts := strings.FieldsFunc(p, func(r rune) bool {
+				return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+			})
+			for _, part := range parts {
+				part = strings.TrimSpace(part)
+				if part != "" && !seenGithub[part] {
+					seenGithub[part] = true
+					uniqueGithub = append(uniqueGithub, part)
+				}
 			}
 		}
 		yamlCfg.Github = uniqueGithub
@@ -83,27 +109,77 @@ func runCheckerWithConfig(ctx context.Context, cfg *Config, fileExplicit, config
 			return fmt.Errorf("no local or github sources specified")
 		}
 
-		for _, localPath := range yamlCfg.Local {
-			sourceRes, err := checkLocalMod(ctx, cfg, localPath)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to check local go.mod at %s: %v\n", localPath, err)
-				continue
-			}
-			results = append(results, sourceRes)
+		type checkTask struct {
+			index   int
+			isLocal bool
+			path    string
 		}
+
+		var tasks []checkTask
+		totalSources := len(yamlCfg.Local) + len(yamlCfg.Github)
+		idx := 0
+		for _, localPath := range yamlCfg.Local {
+			tasks = append(tasks, checkTask{index: idx, isLocal: true, path: localPath})
+			idx++
+		}
+		for _, githubPath := range yamlCfg.Github {
+			tasks = append(tasks, checkTask{index: idx, isLocal: false, path: githubPath})
+			idx++
+		}
+
+		resultsSlice := make([]SourceResult, totalSources)
+		resultsValid := make([]bool, totalSources)
+		var resultsMu sync.Mutex
 
 		httpClient := http.DefaultClient
 		if cfg.Client != nil && cfg.Client.HTTPClient != nil {
 			httpClient = cfg.Client.HTTPClient
 		}
 
-		for _, githubPath := range yamlCfg.Github {
-			sourceRes, err := checkGithubMod(ctx, cfg, httpClient, githubPath)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to check github go.mod at %s: %v\n", sanitizeURL(githubPath), err)
-				continue
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, 10)
+
+		for _, task := range tasks {
+			wg.Add(1)
+			go func(t checkTask) {
+				defer wg.Done()
+				select {
+				case <-ctx.Done():
+					return
+				case sem <- struct{}{}:
+				}
+				defer func() { <-sem }()
+
+				var sourceRes SourceResult
+				var err error
+
+				if t.isLocal {
+					sourceRes, err = checkLocalMod(ctx, cfg, t.path)
+					if err != nil {
+						_, _ = fmt.Fprintf(cfg.Err, "Warning: failed to check local go.mod at %s: %v\n", t.path, err)
+						return
+					}
+				} else {
+					sourceRes, err = checkGithubMod(ctx, cfg, httpClient, t.path)
+					if err != nil {
+						_, _ = fmt.Fprintf(cfg.Err, "Warning: failed to check github go.mod at %s: %v\n", sanitizeURL(t.path), err)
+						return
+					}
+				}
+
+				resultsMu.Lock()
+				resultsSlice[t.index] = sourceRes
+				resultsValid[t.index] = true
+				resultsMu.Unlock()
+			}(task)
+		}
+
+		wg.Wait()
+
+		for i := 0; i < totalSources; i++ {
+			if resultsValid[i] {
+				results = append(results, resultsSlice[i])
 			}
-			results = append(results, sourceRes)
 		}
 
 		if cfg.OutputPath == "" {
@@ -125,13 +201,13 @@ func runCheckerWithConfig(ctx context.Context, cfg *Config, fileExplicit, config
 		}
 		results = []SourceResult{sourceRes}
 
-		if !cfg.JsonOutput && !outputExplicit {
-			printAnalysisHeader(len(sourceRes.Dependencies), cfg.CheckAll, path)
+		if !cfg.JSONOutput && !outputExplicit {
+			printAnalysisHeader(cfg.Out, len(sourceRes.Dependencies), cfg.CheckAll, path)
 		}
 	}
 
 	outputPath := cfg.OutputPath
-	isJSON := cfg.JsonOutput || strings.HasSuffix(strings.ToLower(outputPath), ".json")
+	isJSON := cfg.JSONOutput || strings.HasSuffix(strings.ToLower(outputPath), ".json")
 
 	if outputExplicit && outputPath == "" {
 		if isJSON {
@@ -142,15 +218,15 @@ func runCheckerWithConfig(ctx context.Context, cfg *Config, fileExplicit, config
 	}
 
 	if outputPath != "" {
-		isJSON = cfg.JsonOutput || strings.HasSuffix(strings.ToLower(outputPath), ".json")
+		isJSON = cfg.JSONOutput || strings.HasSuffix(strings.ToLower(outputPath), ".json")
 		return writeReport(outputPath, isJSON, results)
 	}
 
-	if cfg.JsonOutput {
-		return printMultiJsonResults(results)
+	if cfg.JSONOutput {
+		return printMultiJsonResults(cfg.Out, results)
 	}
 
-	printTextResults(results, singleMode)
+	printTextResults(cfg.Out, results, singleMode)
 	return nil
 }
 
@@ -160,6 +236,8 @@ func resolveConfigPath(cfg *Config, configExplicit bool) string {
 	if !configExplicit {
 		if _, err := os.Stat("gomajor.yaml"); err == nil {
 			return "gomajor.yaml"
+		} else if !os.IsNotExist(err) {
+			_, _ = fmt.Fprintf(cfg.Err, "Warning: failed to stat gomajor.yaml: %v\n", err)
 		}
 	}
 	return configPath
@@ -247,9 +325,23 @@ func checkDependencies(ctx context.Context, cfg *Config, reqs []*modfile.Require
 		close(resultsChan)
 	}()
 
+	isTerminal := !cfg.JSONOutput && (isatty.IsTerminal(os.Stderr.Fd()) || isatty.IsCygwinTerminal(os.Stderr.Fd()))
+	if isTerminal {
+		_, _ = fmt.Fprintf(cfg.Err, "Checking dependencies: 0/%d completed...", len(reqs))
+	}
+
 	resultsMap := make(map[string]checker.ModuleInfo)
+	completed := 0
 	for info := range resultsChan {
 		resultsMap[info.Current] = info
+		if isTerminal {
+			completed++
+			_, _ = fmt.Fprintf(cfg.Err, "\rChecking dependencies: %d/%d completed...", completed, len(reqs))
+		}
+	}
+
+	if isTerminal {
+		_, _ = fmt.Fprint(cfg.Err, "\r\033[K") // Carriage return and clear line
 	}
 
 	var orderedResults []checker.ModuleInfo
