@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [1.6.0] - 2026-07-01
+
+### Added
+
+- **GitHub Token Authentication**: Added support for authenticating raw `go.mod` requests for private GitHub repositories using the `GITHUB_TOKEN` and `GITHUB_PAT` environment variables, or credentials embedded directly in the repository URL.
+- **HTTP Request Retry Logic**: Implemented request retry logic with exponential backoff (up to 3 attempts) for Go module proxy lookups and remote GitHub fetches to robustly handle rate limiting (429) and transient server errors (5xx).
+- **Configurable Output/Error Streams**: Added `Out` and `Err` configurable output/error stream writers (`io.Writer`) within the `Config` struct (defaulting to `os.Stdout` and `os.Stderr` respectively) to improve programmatic integration and testability.
+- **CI/CD, Linting, & Dependabot Automation**
+
+### Changed
+
+- **Refactoring & Code Quality**: Resolved linter warnings across the codebase and optimized linter configuration paths.
+
+---
+
 ## [1.5.0] - 2026-06-18
 
 ### Added
