@@ -335,7 +335,7 @@ func TestClient(t *testing.T) {
 func TestClient_Retry(t *testing.T) {
 	t.Run("TransientErrorsRetried", func(t *testing.T) {
 		attempts := 0
-		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 			attempts++
 			if attempts < 2 {
 				rw.WriteHeader(http.StatusBadGateway) // 502 Bad Gateway
@@ -362,7 +362,7 @@ func TestClient_Retry(t *testing.T) {
 
 	t.Run("TerminalErrorImmediateFail", func(t *testing.T) {
 		attempts := 0
-		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 			attempts++
 			rw.WriteHeader(http.StatusNotFound) // 404
 		}))
@@ -389,7 +389,7 @@ func TestClient_Concurrency(t *testing.T) {
 	var maxInFlight int
 	var mu sync.Mutex
 
-	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 		mu.Lock()
 		inFlight++
 		if inFlight > maxInFlight {

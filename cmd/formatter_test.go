@@ -71,7 +71,7 @@ func TestFormatter(t *testing.T) {
 		}
 	})
 
-	t.Run("PrintTable_Empty", func(t *testing.T) {
+	t.Run("PrintTable_Empty", func(_ *testing.T) {
 		// Just ensure it doesn't panic
 		printTable(io.Discard, "", nil)
 	})

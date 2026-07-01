@@ -17,6 +17,18 @@ import (
 	"golang.org/x/mod/module"
 )
 
+const (
+	versionKey      = "Version"
+	localModContent = `module example.com/local
+go 1.21
+require github.com/foo/bar v1.0.0
+`
+	localSource        = "local"
+	githubSource       = "github"
+	fooBarModule       = "github.com/foo/bar"
+	githubOwnerRepoURL = "https://github.com/owner/repo"
+)
+
 func TestRunner(t *testing.T) {
 	t.Run("RunChecker", func(t *testing.T) {
 		tests := []struct {
@@ -57,7 +69,7 @@ require github.com/foo/bar v1.0.0
 				maxProbe: 2,
 				httpHandler: func(rw http.ResponseWriter, req *http.Request) {
 					if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
-						_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
+						_ = json.NewEncoder(rw).Encode(map[string]string{versionKey: "v2.0.0"})
 					} else {
 						rw.WriteHeader(http.StatusNotFound)
 					}
@@ -76,7 +88,7 @@ require (
 `,
 				checkAll: true,
 				maxProbe: 1,
-				httpHandler: func(rw http.ResponseWriter, req *http.Request) {
+				httpHandler: func(rw http.ResponseWriter, _ *http.Request) {
 					rw.WriteHeader(http.StatusNotFound)
 				},
 			},
@@ -90,7 +102,7 @@ require github.com/foo/bar v1.0.0
 				jsonOutput: true,
 				httpHandler: func(rw http.ResponseWriter, req *http.Request) {
 					if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
-						_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
+						_ = json.NewEncoder(rw).Encode(map[string]string{versionKey: "v2.0.0"})
 					} else {
 						rw.WriteHeader(http.StatusNotFound)
 					}
@@ -107,7 +119,7 @@ require github.com/foo/bar v1.0.0
 				if tt.httpHandler != nil {
 					server = httptest.NewServer(http.HandlerFunc(tt.httpHandler))
 				} else {
-					server = httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+					server = httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 						rw.WriteHeader(http.StatusNotFound)
 					}))
 				}
@@ -134,7 +146,7 @@ require github.com/foo/bar v1.0.0
 
 		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 			if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
-				_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
+				_ = json.NewEncoder(rw).Encode(map[string]string{versionKey: "v2.0.0"})
 			} else {
 				rw.WriteHeader(http.StatusNotFound)
 			}
@@ -187,7 +199,7 @@ require github.com/foo/bar v1.0.0
 	t.Run("RunMultiChecker", func(t *testing.T) {
 		tests := []struct {
 			name           string
-			wantJsonOutput bool
+			wantJSONOutput bool
 			setup          func(t *testing.T, dir string, serverURL string) (configPath string, cfg *Config)
 			wantResultsLen int
 			verify         func(t *testing.T, output YAMLOutput, dir string)
@@ -196,10 +208,7 @@ require github.com/foo/bar v1.0.0
 				name: "ConfigYaml",
 				setup: func(t *testing.T, dir string, serverURL string) (string, *Config) {
 					localModPath := filepath.Join(dir, "local.mod")
-					localContent := `module example.com/local
-go 1.21
-require github.com/foo/bar v1.0.0
-`
+					localContent := localModContent
 					if err := os.WriteFile(localModPath, []byte(localContent), 0o644); err != nil {
 						t.Fatalf("os.WriteFile: %v", err)
 					}
@@ -226,19 +235,19 @@ require github.com/foo/bar v1.0.0
 					}
 				},
 				wantResultsLen: 2,
-				verify: func(t *testing.T, output YAMLOutput, dir string) {
+				verify: func(t *testing.T, output YAMLOutput, _ string) {
 					localFound := false
 					for _, res := range output.Results {
 						if filepath.Base(res.Source) == "local.mod" {
 							localFound = true
-							if res.SourceType != "local" {
+							if res.SourceType != localSource {
 								t.Errorf("source %s type = %q, want 'local'", res.Source, res.SourceType)
 							}
 							if len(res.Dependencies) != 1 {
 								t.Fatalf("expected 1 dependency for local, got %d", len(res.Dependencies))
 							}
 							dep := res.Dependencies[0]
-							if dep.Module != "github.com/foo/bar" || dep.CurrentVersion != "v1.0.0" || dep.LatestMajorVersion != "v2.0.0" || !dep.HasUpdate {
+							if dep.Module != fooBarModule || dep.CurrentVersion != "v1.0.0" || dep.LatestMajorVersion != "v2.0.0" || !dep.HasUpdate {
 								t.Errorf("unexpected dependency info for local: %+v", dep)
 							}
 						}
@@ -250,7 +259,7 @@ require github.com/foo/bar v1.0.0
 			},
 			{
 				name: "GithubReposDirectly",
-				setup: func(t *testing.T, dir string, serverURL string) (string, *Config) {
+				setup: func(_ *testing.T, dir string, serverURL string) (string, *Config) {
 					outputPath := filepath.Join(dir, "gomajor-report.yaml")
 					return "", &Config{
 						MaxProbe:    2,
@@ -261,7 +270,7 @@ require github.com/foo/bar v1.0.0
 				wantResultsLen: 1,
 				verify: func(t *testing.T, output YAMLOutput, _ string) {
 					res := output.Results[0]
-					if res.SourceType != "github" {
+					if res.SourceType != githubSource {
 						t.Errorf("source type = %q, want 'github'", res.SourceType)
 					}
 					if len(res.Dependencies) != 1 {
@@ -275,12 +284,9 @@ require github.com/foo/bar v1.0.0
 			},
 			{
 				name: "ConfigYaml_DisableOptions",
-				setup: func(t *testing.T, dir string, serverURL string) (string, *Config) {
+				setup: func(t *testing.T, dir string, _ string) (string, *Config) {
 					localModPath := filepath.Join(dir, "local.mod")
-					localContent := `module example.com/local
-go 1.21
-require github.com/foo/bar v1.0.0
-`
+					localContent := localModContent
 					if err := os.WriteFile(localModPath, []byte(localContent), 0o644); err != nil {
 						t.Fatalf("os.WriteFile: %v", err)
 					}
@@ -309,7 +315,7 @@ require github.com/foo/bar v1.0.0
 					}
 				},
 				wantResultsLen: 1,
-				verify: func(t *testing.T, output YAMLOutput, dir string) {
+				verify: func(t *testing.T, output YAMLOutput, _ string) {
 					res := output.Results[0]
 					if len(res.Dependencies) != 1 {
 						t.Fatalf("expected 1 dependency for local, got %d", len(res.Dependencies))
@@ -322,13 +328,10 @@ require github.com/foo/bar v1.0.0
 			},
 			{
 				name:           "ConfigJson",
-				wantJsonOutput: true,
+				wantJSONOutput: true,
 				setup: func(t *testing.T, dir string, serverURL string) (string, *Config) {
 					localModPath := filepath.Join(dir, "local.mod")
-					localContent := `module example.com/local
-go 1.21
-require github.com/foo/bar v1.0.0
-`
+					localContent := localModContent
 					if err := os.WriteFile(localModPath, []byte(localContent), 0o644); err != nil {
 						t.Fatalf("os.WriteFile: %v", err)
 					}
@@ -355,19 +358,19 @@ require github.com/foo/bar v1.0.0
 					}
 				},
 				wantResultsLen: 2,
-				verify: func(t *testing.T, output YAMLOutput, dir string) {
+				verify: func(t *testing.T, output YAMLOutput, _ string) {
 					localFound := false
 					for _, res := range output.Results {
 						if filepath.Base(res.Source) == "local.mod" {
 							localFound = true
-							if res.SourceType != "local" {
+							if res.SourceType != localSource {
 								t.Errorf("source %s type = %q, want 'local'", res.Source, res.SourceType)
 							}
 							if len(res.Dependencies) != 1 {
 								t.Fatalf("expected 1 dependency for local, got %d", len(res.Dependencies))
 							}
 							dep := res.Dependencies[0]
-							if dep.Module != "github.com/foo/bar" || dep.CurrentVersion != "v1.0.0" || dep.LatestMajorVersion != "v2.0.0" || !dep.HasUpdate {
+							if dep.Module != fooBarModule || dep.CurrentVersion != "v1.0.0" || dep.LatestMajorVersion != "v2.0.0" || !dep.HasUpdate {
 								t.Errorf("unexpected dependency info for local: %+v", dep)
 							}
 						}
@@ -381,10 +384,7 @@ require github.com/foo/bar v1.0.0
 				name: "DeduplicateSources",
 				setup: func(t *testing.T, dir string, serverURL string) (string, *Config) {
 					localModPath := filepath.Join(dir, "local.mod")
-					localContent := `module example.com/local
-go 1.21
-require github.com/foo/bar v1.0.0
-`
+					localContent := localModContent
 					if err := os.WriteFile(localModPath, []byte(localContent), 0o644); err != nil {
 						t.Fatalf("os.WriteFile: %v", err)
 					}
@@ -411,14 +411,14 @@ require github.com/foo/bar v1.0.0
 					}
 				},
 				wantResultsLen: 2,
-				verify: func(t *testing.T, output YAMLOutput, dir string) {
+				verify: func(t *testing.T, output YAMLOutput, _ string) {
 					localCount := 0
 					githubCount := 0
 					for _, res := range output.Results {
 						switch res.SourceType {
-						case "local":
+						case localSource:
 							localCount++
-						case "github":
+						case githubSource:
 							githubCount++
 						}
 					}
@@ -432,7 +432,7 @@ require github.com/foo/bar v1.0.0
 			},
 			{
 				name: "SpaceAndCommaSeparatedGitHubRepos",
-				setup: func(t *testing.T, dir string, serverURL string) (string, *Config) {
+				setup: func(_ *testing.T, dir string, serverURL string) (string, *Config) {
 					outputPath := filepath.Join(dir, "gomajor-report.yaml")
 					reposStr := fmt.Sprintf("%s/owner/repo/main/go.mod, %s/owner/repo/main/go.mod\t%s/owner/repo/main/go.mod", serverURL, serverURL, serverURL)
 					return "", &Config{
@@ -447,7 +447,7 @@ require github.com/foo/bar v1.0.0
 						t.Fatalf("expected 1 result, got %d", len(output.Results))
 					}
 					res := output.Results[0]
-					if res.SourceType != "github" {
+					if res.SourceType != githubSource {
 						t.Errorf("source type = %q, want 'github'", res.SourceType)
 					}
 					if len(res.Dependencies) != 1 {
@@ -471,11 +471,11 @@ require github.com/foo/baz v1.0.0
 					}
 
 					if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
-						_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
+						_ = json.NewEncoder(rw).Encode(map[string]string{versionKey: "v2.0.0"})
 						return
 					}
 					if req.URL.Path == "/github.com/foo/baz/v2/@latest" {
-						_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.5.0"})
+						_ = json.NewEncoder(rw).Encode(map[string]string{versionKey: "v2.5.0"})
 						return
 					}
 
@@ -491,7 +491,7 @@ require github.com/foo/baz v1.0.0
 
 				outputPath := testConfig.OutputPath
 				if configPath != "" {
-					if tt.wantJsonOutput {
+					if tt.wantJSONOutput {
 						outputPath = filepath.Join(dir, "gomajor-report.json")
 					} else {
 						outputPath = filepath.Join(dir, "gomajor-report.yaml")
@@ -513,7 +513,7 @@ require github.com/foo/baz v1.0.0
 				}
 
 				var output YAMLOutput
-				if tt.wantJsonOutput {
+				if tt.wantJSONOutput {
 					if err := json.Unmarshal(outContent, &output); err != nil {
 						t.Fatalf("failed to unmarshal output JSON: %v", err)
 					}
@@ -536,10 +536,10 @@ require github.com/foo/baz v1.0.0
 		results := []SourceResult{
 			{
 				Source:     "test-source",
-				SourceType: "local",
+				SourceType: localSource,
 				Dependencies: []DependencyInfo{
 					{
-						Module:             "github.com/foo/bar",
+						Module:             fooBarModule,
 						CurrentVersion:     "v1.0.0",
 						LatestMajorVersion: "v2.0.0",
 						LatestMajorPath:    "github.com/foo/bar/v2",
@@ -550,9 +550,9 @@ require github.com/foo/baz v1.0.0
 		}
 
 		var buf bytes.Buffer
-		err := printMultiJsonResults(&buf, results)
+		err := printMultiJSONResults(&buf, results)
 		if err != nil {
-			t.Fatalf("printMultiJsonResults failed: %v", err)
+			t.Fatalf("printMultiJSONResults failed: %v", err)
 		}
 
 		var output YAMLOutput
@@ -566,8 +566,8 @@ require github.com/foo/baz v1.0.0
 	})
 
 	t.Run("CheckDependencies_Cancelled", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v1.0.0"})
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(rw).Encode(map[string]string{versionKey: "v1.0.0"})
 		}))
 		defer server.Close()
 
@@ -617,8 +617,8 @@ require github.com/foo/baz v1.0.0
 				expected: "https://redacted@git.internal.corp/project/go.mod",
 			},
 			{
-				input:    "https://github.com/owner/repo",
-				expected: "https://github.com/owner/repo",
+				input:    githubOwnerRepoURL,
+				expected: githubOwnerRepoURL,
 			},
 			{
 				input:    "/run/media/chiman/Data/github/gomajor/go.mod",

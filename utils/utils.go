@@ -25,7 +25,7 @@ func ParseModulePath(modPath string) (basePath string, major int, sep string) {
 	if loc == nil {
 		return modPath, 1, "/"
 	}
-	sep = modPath[loc[2]:loc[2]+1]
+	sep = modPath[loc[2] : loc[2]+1]
 	vStr := modPath[loc[4]:loc[5]] // e.g. "v2"
 	n, err := strconv.Atoi(strings.TrimPrefix(vStr, "v"))
 	// For dot separator (e.g. gopkg.in), major versions can be v0 or v1 (e.g. package.v1)

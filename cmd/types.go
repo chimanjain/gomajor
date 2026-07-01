@@ -89,7 +89,7 @@ func writeReport(outputPath string, isJSON bool, results []SourceResult) error {
 	}
 
 	if err == nil {
-		err = os.WriteFile(outputPath, data, 0o644)
+		err = os.WriteFile(outputPath, data, 0o644) // #nosec G306
 	}
 	if err != nil {
 		return fmt.Errorf("failed to write %s output: %w", formatName, err)
