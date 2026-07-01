@@ -36,7 +36,7 @@ var rootCmd = &cobra.Command{
 	Long: `A tool that parses a go.mod file and checks the Go proxy 
 to discover if there are newer major versions (e.g. v2 -> v3) 
 available for your dependencies.`,
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(cmd *cobra.Command, _ []string) {
 		config.Client.DisableMinor = !config.Minor
 		config.Client.DisableMajor = !config.Major
 		runChecker(cmd.Context(), cmd.Flags().Changed("file"), cmd.Flags().Changed("config"), cmd.Flags().Changed("output"))

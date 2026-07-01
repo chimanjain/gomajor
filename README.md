@@ -11,7 +11,7 @@
 
 A fast, color-coded CLI tool designed to help you keep your Go dependencies up-to-date. GoMajor parses your `go.mod` files and queries the Go Module Proxy to proactively discover both **minor updates** (🟢 Green) and **major upgrades** (🟡 Yellow).
 
-### 💡 Why GoMajor?
+## 💡 Why GoMajor?
 
 Standard commands like `go list -m -u all` are great for finding minor updates, but they completely miss new major versions. Because Go treats different major versions (e.g., `github.com/foo/bar` vs `github.com/foo/bar/v2`) as entirely separate modules, standard tools won't notify you when a library releases a new major version.
 
@@ -75,13 +75,13 @@ gomajor -o report.json
 | `--major` | | Toggle major version upgrades checking | `true` | `gomajor --major=false` |
 | `--config` | `-c` | Path to multi-source YAML config file | `"gomajor.yaml"` | `gomajor -c my-config.yaml` |
 | `--github` | `-g` | Direct comma-separated GitHub repositories | `""` | `gomajor -g owner/repo` |
-| `--output` | `-o` | Save results to a structured YAML or JSON report file | `""` | `gomajor -o report.json` |
+| `--output` | `-o` | Save results to a structured YAML or JSON report file (format auto-detected via file extension, e.g., `.json` or `.yaml`) | `""` | `gomajor -o report.json` |
 | `--json` | | Format reports and stdout data in JSON | `false` | `gomajor --json` |
 | `--no-color` | | Suppress ANSI colored terminal formatting | `false` | `gomajor --no-color` |
 
 ### Multi-Source Checking (`gomajor.yaml`)
 
-Define multiple local directories and remote GitHub repositories to analyze in a single run:
+Define multiple local directories and remote GitHub repositories to analyze in a single run. GoMajor automatically detects and loads `gomajor.yaml` in the current working directory, or you can specify a custom path using the `--config` / `-c` flag.
 
 ```yaml
 local:
@@ -133,6 +133,7 @@ GoMajor respects standard Go environment variables to ensure compatibility, priv
 
 - `GOPROXY`: Specifies the Go module proxy URL (defaults to `https://proxy.golang.org`).
 - `GOPRIVATE` / `GONOPROXY`: Comma-separated list of glob patterns for private module paths. GoMajor automatically bypasses public proxy queries for matching private dependencies, preventing internal package names from leaking to public proxies and avoiding query timeouts.
+- `GITHUB_TOKEN` / `GITHUB_PAT`: Personal Access Token used to authenticate raw `go.mod` requests for private GitHub repositories. Alternatively, credentials can be embedded directly in the repository URL (e.g., `https://<token>@github.com/owner/repo`).
 
 Additionally, GoMajor includes robust security defenses:
 

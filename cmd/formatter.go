@@ -143,7 +143,7 @@ func printAnalysisHeader(w io.Writer, count int, checkAll bool, path string) {
 	_, _ = fmt.Fprintf(w, "%s from %s...\n\n", color.HiCyanString(msg), color.HiBlackString(path))
 }
 
-func printMultiJsonResults(w io.Writer, results []SourceResult) error {
+func printMultiJSONResults(w io.Writer, results []SourceResult) error {
 	outputData := YAMLOutput{Results: results}
 	data, err := json.MarshalIndent(outputData, "", "  ")
 	if err != nil {

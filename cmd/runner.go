@@ -33,20 +33,7 @@ func runCheckerWithConfig(ctx context.Context, cfg *Config, fileExplicit, config
 		color.NoColor = true
 	}
 
-	// Normalize/split GitHub repos if they contain spaces or commas
-	var normalizedGitHubRepos []string
-	for _, repo := range cfg.GitHubRepos {
-		parts := strings.FieldsFunc(repo, func(r rune) bool {
-			return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
-		})
-		for _, part := range parts {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				normalizedGitHubRepos = append(normalizedGitHubRepos, part)
-			}
-		}
-	}
-	cfg.GitHubRepos = normalizedGitHubRepos
+	cfg.GitHubRepos = normalizeGitHubRepos(cfg.GitHubRepos)
 
 	configPath := resolveConfigPath(cfg, configExplicit)
 	var results []SourceResult
@@ -77,132 +64,25 @@ func runCheckerWithConfig(ctx context.Context, cfg *Config, fileExplicit, config
 			yamlCfg.Github = append(yamlCfg.Github, cfg.GitHubRepos...)
 		}
 
-		// Deduplicate local paths
-		seenLocal := make(map[string]bool)
-		var uniqueLocal []string
-		for _, p := range yamlCfg.Local {
-			if !seenLocal[p] {
-				seenLocal[p] = true
-				uniqueLocal = append(uniqueLocal, p)
-			}
-		}
-		yamlCfg.Local = uniqueLocal
-
-		// Deduplicate remote GitHub paths (handling potential space or comma separated lists)
-		seenGithub := make(map[string]bool)
-		var uniqueGithub []string
-		for _, p := range yamlCfg.Github {
-			parts := strings.FieldsFunc(p, func(r rune) bool {
-				return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
-			})
-			for _, part := range parts {
-				part = strings.TrimSpace(part)
-				if part != "" && !seenGithub[part] {
-					seenGithub[part] = true
-					uniqueGithub = append(uniqueGithub, part)
-				}
-			}
-		}
-		yamlCfg.Github = uniqueGithub
-
-		if len(yamlCfg.Local) == 0 && len(yamlCfg.Github) == 0 {
-			return fmt.Errorf("no local or github sources specified")
-		}
-
-		type checkTask struct {
-			index   int
-			isLocal bool
-			path    string
-		}
-
-		var tasks []checkTask
-		totalSources := len(yamlCfg.Local) + len(yamlCfg.Github)
-		idx := 0
-		for _, localPath := range yamlCfg.Local {
-			tasks = append(tasks, checkTask{index: idx, isLocal: true, path: localPath})
-			idx++
-		}
-		for _, githubPath := range yamlCfg.Github {
-			tasks = append(tasks, checkTask{index: idx, isLocal: false, path: githubPath})
-			idx++
-		}
-
-		resultsSlice := make([]SourceResult, totalSources)
-		resultsValid := make([]bool, totalSources)
-		var resultsMu sync.Mutex
-
 		httpClient := http.DefaultClient
 		if cfg.Client != nil && cfg.Client.HTTPClient != nil {
 			httpClient = cfg.Client.HTTPClient
 		}
 
-		var wg sync.WaitGroup
-		sem := make(chan struct{}, 10)
-
-		for _, task := range tasks {
-			wg.Add(1)
-			go func(t checkTask) {
-				defer wg.Done()
-				select {
-				case <-ctx.Done():
-					return
-				case sem <- struct{}{}:
-				}
-				defer func() { <-sem }()
-
-				var sourceRes SourceResult
-				var err error
-
-				if t.isLocal {
-					sourceRes, err = checkLocalMod(ctx, cfg, t.path)
-					if err != nil {
-						_, _ = fmt.Fprintf(cfg.Err, "Warning: failed to check local go.mod at %s: %v\n", t.path, err)
-						return
-					}
-				} else {
-					sourceRes, err = checkGithubMod(ctx, cfg, httpClient, t.path)
-					if err != nil {
-						_, _ = fmt.Fprintf(cfg.Err, "Warning: failed to check github go.mod at %s: %v\n", sanitizeURL(t.path), err)
-						return
-					}
-				}
-
-				resultsMu.Lock()
-				resultsSlice[t.index] = sourceRes
-				resultsValid[t.index] = true
-				resultsMu.Unlock()
-			}(task)
-		}
-
-		wg.Wait()
-
-		for i := 0; i < totalSources; i++ {
-			if resultsValid[i] {
-				results = append(results, resultsSlice[i])
-			}
+		var err error
+		results, err = runMultiSources(ctx, cfg, yamlCfg, httpClient)
+		if err != nil {
+			return err
 		}
 
 		if cfg.OutputPath == "" {
 			cfg.OutputPath = yamlCfg.Output
 		}
 	} else {
-		path := cfg.ModFilePath
-		if !fileExplicit {
-			resolved, err := resolveModFile()
-			if err != nil {
-				return err
-			}
-			path = resolved
-		}
-
-		sourceRes, err := checkLocalMod(ctx, cfg, path)
+		var err error
+		results, err = runLocalSource(ctx, cfg, fileExplicit, outputExplicit)
 		if err != nil {
 			return err
-		}
-		results = []SourceResult{sourceRes}
-
-		if !cfg.JSONOutput && !outputExplicit {
-			printAnalysisHeader(cfg.Out, len(sourceRes.Dependencies), cfg.CheckAll, path)
 		}
 	}
 
@@ -223,11 +103,152 @@ func runCheckerWithConfig(ctx context.Context, cfg *Config, fileExplicit, config
 	}
 
 	if cfg.JSONOutput {
-		return printMultiJsonResults(cfg.Out, results)
+		return printMultiJSONResults(cfg.Out, results)
 	}
 
 	printTextResults(cfg.Out, results, singleMode)
 	return nil
+}
+
+func normalizeGitHubRepos(repos []string) []string {
+	var normalized []string
+	for _, repo := range repos {
+		parts := strings.FieldsFunc(repo, func(r rune) bool {
+			return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+		})
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				normalized = append(normalized, part)
+			}
+		}
+	}
+	return normalized
+}
+
+func runLocalSource(ctx context.Context, cfg *Config, fileExplicit, outputExplicit bool) ([]SourceResult, error) {
+	path := cfg.ModFilePath
+	if !fileExplicit {
+		resolved, err := resolveModFile()
+		if err != nil {
+			return nil, err
+		}
+		path = resolved
+	}
+
+	sourceRes, err := checkLocalMod(ctx, cfg, path)
+	if err != nil {
+		return nil, err
+	}
+
+	if !cfg.JSONOutput && !outputExplicit {
+		printAnalysisHeader(cfg.Out, len(sourceRes.Dependencies), cfg.CheckAll, path)
+	}
+	return []SourceResult{sourceRes}, nil
+}
+
+type checkTask struct {
+	index   int
+	isLocal bool
+	path    string
+}
+
+func runMultiSources(ctx context.Context, cfg *Config, yamlCfg YAMLConfig, httpClient *http.Client) ([]SourceResult, error) {
+	// Deduplicate local paths
+	seenLocal := make(map[string]bool)
+	var uniqueLocal []string
+	for _, p := range yamlCfg.Local {
+		if !seenLocal[p] {
+			seenLocal[p] = true
+			uniqueLocal = append(uniqueLocal, p)
+		}
+	}
+	yamlCfg.Local = uniqueLocal
+
+	// Deduplicate remote GitHub paths (handling potential space or comma separated lists)
+	seenGithub := make(map[string]bool)
+	var uniqueGithub []string
+	for _, p := range yamlCfg.Github {
+		parts := strings.FieldsFunc(p, func(r rune) bool {
+			return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+		})
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part != "" && !seenGithub[part] {
+				seenGithub[part] = true
+				uniqueGithub = append(uniqueGithub, part)
+			}
+		}
+	}
+	yamlCfg.Github = uniqueGithub
+
+	if len(yamlCfg.Local) == 0 && len(yamlCfg.Github) == 0 {
+		return nil, fmt.Errorf("no local or github sources specified")
+	}
+
+	var tasks []checkTask
+	totalSources := len(yamlCfg.Local) + len(yamlCfg.Github)
+	idx := 0
+	for _, localPath := range yamlCfg.Local {
+		tasks = append(tasks, checkTask{index: idx, isLocal: true, path: localPath})
+		idx++
+	}
+	for _, githubPath := range yamlCfg.Github {
+		tasks = append(tasks, checkTask{index: idx, isLocal: false, path: githubPath})
+		idx++
+	}
+
+	resultsSlice := make([]SourceResult, totalSources)
+	resultsValid := make([]bool, totalSources)
+	var resultsMu sync.Mutex
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 10)
+
+	for _, task := range tasks {
+		wg.Add(1)
+		go func(t checkTask) {
+			defer wg.Done()
+			select {
+			case <-ctx.Done():
+				return
+			case sem <- struct{}{}:
+			}
+			defer func() { <-sem }()
+
+			var sourceRes SourceResult
+			var err error
+
+			if t.isLocal {
+				sourceRes, err = checkLocalMod(ctx, cfg, t.path)
+				if err != nil {
+					_, _ = fmt.Fprintf(cfg.Err, "Warning: failed to check local go.mod at %s: %v\n", t.path, err)
+					return
+				}
+			} else {
+				sourceRes, err = checkGithubMod(ctx, cfg, httpClient, t.path)
+				if err != nil {
+					_, _ = fmt.Fprintf(cfg.Err, "Warning: failed to check github go.mod at %s: %v\n", sanitizeURL(t.path), err)
+					return
+				}
+			}
+
+			resultsMu.Lock()
+			resultsSlice[t.index] = sourceRes
+			resultsValid[t.index] = true
+			resultsMu.Unlock()
+		}(task)
+	}
+
+	wg.Wait()
+
+	var results []SourceResult
+	for i := 0; i < totalSources; i++ {
+		if resultsValid[i] {
+			results = append(results, resultsSlice[i])
+		}
+	}
+	return results, nil
 }
 
 // resolveConfigPath determines the YAML configuration file path.
@@ -253,8 +274,8 @@ func checkLocalMod(ctx context.Context, cfg *Config, path string) (SourceResult,
 }
 
 // checkGithubMod fetches and checks a remote go.mod file from GitHub.
-func checkGithubMod(ctx context.Context, cfg *Config, httpClient *http.Client, pathOrUrl string) (SourceResult, error) {
-	content, resolvedURL, err := fetchGithubMod(ctx, httpClient, pathOrUrl)
+func checkGithubMod(ctx context.Context, cfg *Config, httpClient *http.Client, pathOrURL string) (SourceResult, error) {
+	content, resolvedURL, err := fetchGithubMod(ctx, httpClient, pathOrURL)
 	if err != nil {
 		return SourceResult{}, err
 	}

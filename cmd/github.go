@@ -64,14 +64,14 @@ func getGithubRawURLs(input string) []string {
 }
 
 // fetchGithubMod retrieves a go.mod from a GitHub repository or URL.
-func fetchGithubMod(ctx context.Context, client *http.Client, pathOrUrl string) ([]byte, string, error) {
-	urls := getGithubRawURLs(pathOrUrl)
+func fetchGithubMod(ctx context.Context, client *http.Client, pathOrURL string) ([]byte, string, error) {
+	urls := getGithubRawURLs(pathOrURL)
 	if len(urls) == 0 {
-		return nil, "", fmt.Errorf("invalid github repository format: %s", pathOrUrl)
+		return nil, "", fmt.Errorf("invalid github repository format: %s", pathOrURL)
 	}
 
 	var token string
-	if u, err := url.Parse(pathOrUrl); err == nil && u.User != nil {
+	if u, err := url.Parse(pathOrURL); err == nil && u.User != nil {
 		if passwd, ok := u.User.Password(); ok {
 			token = passwd
 		} else {

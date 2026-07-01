@@ -19,10 +19,16 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+const (
+	defaultProxy = "https://proxy.golang.org"
+	directProxy  = "direct"
+	offProxy     = "off"
+)
+
 // Client handles HTTP requests to the Go module proxy.
 type Client struct {
-	HTTPClient *http.Client
-	ProxyBase  string
+	HTTPClient   *http.Client
+	ProxyBase    string
 	DisableMinor bool
 	DisableMajor bool
 
@@ -36,15 +42,15 @@ type Client struct {
 func DefaultClient() *Client {
 	proxy := os.Getenv("GOPROXY")
 	if proxy == "" {
-		proxy = "https://proxy.golang.org"
+		proxy = defaultProxy
 	}
 	// Take the first proxy in the list (e.g. "proxy1,proxy2,direct")
 	if idx := strings.Index(proxy, ","); idx != -1 {
 		proxy = proxy[:idx]
 	}
 	// If it's "direct" or "off", default to the standard proxy for this tool's purposes
-	if proxy == "direct" || proxy == "off" {
-		proxy = "https://proxy.golang.org"
+	if proxy == directProxy || proxy == offProxy {
+		proxy = defaultProxy
 	}
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -98,13 +104,13 @@ func getDefaultClient() *Client {
 var ProxyBase = func() string {
 	proxy := os.Getenv("GOPROXY")
 	if proxy == "" {
-		proxy = "https://proxy.golang.org"
+		proxy = defaultProxy
 	}
 	if idx := strings.Index(proxy, ","); idx != -1 {
 		proxy = proxy[:idx]
 	}
-	if proxy == "direct" || proxy == "off" {
-		proxy = "https://proxy.golang.org"
+	if proxy == directProxy || proxy == offProxy {
+		proxy = defaultProxy
 	}
 	return strings.TrimRight(proxy, "/")
 }()

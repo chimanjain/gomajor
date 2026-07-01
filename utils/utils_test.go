@@ -4,6 +4,13 @@ import (
 	"testing"
 )
 
+const (
+	testUserGoModule   = "github.com/user/gomodule"
+	testUserGoModuleV3 = "github.com/user/gomodule/v3"
+	testYamlGopkg      = "gopkg.in/yaml"
+	testGoogleUUID     = "github.com/google/uuid"
+)
+
 func TestUtils(t *testing.T) {
 	t.Run("ParseModulePath", func(t *testing.T) {
 		tests := []struct {
@@ -13,13 +20,13 @@ func TestUtils(t *testing.T) {
 			wantMajor int
 			wantSep   string
 		}{
-			{"Standard v2", "github.com/user/gomodule/v2", "github.com/user/gomodule", 2, "/"},
-			{"Standard v3", "github.com/user/gomodule/v3", "github.com/user/gomodule", 3, "/"},
-			{"Gopkg.in v2", "gopkg.in/yaml.v2", "gopkg.in/yaml", 2, "."},
-			{"Gopkg.in v3", "gopkg.in/yaml.v3", "gopkg.in/yaml", 3, "."},
-			{"Gopkg.in v1", "gopkg.in/yaml.v1", "gopkg.in/yaml", 1, "."},
-			{"Gopkg.in v0", "gopkg.in/yaml.v0", "gopkg.in/yaml", 0, "."},
-			{"Unversioned", "github.com/google/uuid", "github.com/google/uuid", 1, "/"},
+			{"Standard v2", "github.com/user/gomodule/v2", testUserGoModule, 2, "/"},
+			{"Standard v3", testUserGoModuleV3, testUserGoModule, 3, "/"},
+			{"Gopkg.in v2", "gopkg.in/yaml.v2", testYamlGopkg, 2, "."},
+			{"Gopkg.in v3", "gopkg.in/yaml.v3", testYamlGopkg, 3, "."},
+			{"Gopkg.in v1", "gopkg.in/yaml.v1", testYamlGopkg, 1, "."},
+			{"Gopkg.in v0", "gopkg.in/yaml.v0", testYamlGopkg, 0, "."},
+			{"Unversioned", testGoogleUUID, testGoogleUUID, 1, "/"},
 			{"Invalid v", "github.com/foo/bar/v", "github.com/foo/bar/v", 1, "/"},
 			{"Invalid v1", "github.com/foo/bar/v1", "github.com/foo/bar/v1", 1, "/"},
 			{"Double digit v", "github.com/foo/bar/v10", "github.com/foo/bar", 10, "/"},
@@ -49,9 +56,9 @@ func TestUtils(t *testing.T) {
 			sep      string
 			want     string
 		}{
-			{"Standard", "github.com/user/gomodule", 3, "/", "github.com/user/gomodule/v3"},
-			{"Gopkg.in", "gopkg.in/yaml", 3, ".", "gopkg.in/yaml.v3"},
-			{"DefaultSep", "github.com/user/gomodule", 3, "", "github.com/user/gomodule/v3"},
+			{"Standard", testUserGoModule, 3, "/", testUserGoModuleV3},
+			{"Gopkg.in", testYamlGopkg, 3, ".", "gopkg.in/yaml.v3"},
+			{"DefaultSep", testUserGoModule, 3, "", testUserGoModuleV3},
 		}
 
 		for _, tt := range tests {
@@ -70,7 +77,7 @@ func TestUtils(t *testing.T) {
 			want    string
 			wantErr bool
 		}{
-			{"No uppercase", "github.com/google/uuid", "github.com/google/uuid", false},
+			{"No uppercase", testGoogleUUID, testGoogleUUID, false},
 			{"With uppercase", "github.com/BurntSushi/toml", "github.com/!burnt!sushi/toml", false},
 			{"Empty", "", "", true},
 		}

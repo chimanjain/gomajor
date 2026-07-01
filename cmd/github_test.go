@@ -33,7 +33,7 @@ func TestGetGithubRawURLs(t *testing.T) {
 		},
 		{
 			name:  "github repo link",
-			input: "https://github.com/owner/repo",
+			input: githubOwnerRepoURL,
 			want: []string{
 				"https://raw.githubusercontent.com/owner/repo/main/go.mod",
 				"https://raw.githubusercontent.com/owner/repo/master/go.mod",
@@ -89,7 +89,7 @@ func TestGetGithubRawURLs(t *testing.T) {
 }
 
 func TestFetchGithubMod_Limit(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 		chunk := make([]byte, 1024*1024) // 1 MB chunk
 		for i := 0; i < 11; i++ {
 			_, _ = rw.Write(chunk)
@@ -167,7 +167,7 @@ func TestFetchGithubMod_Auth(t *testing.T) {
 func TestFetchGithubMod_Retries(t *testing.T) {
 	t.Run("TransientRetriesThenSuccess", func(t *testing.T) {
 		attempts := 0
-		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 			attempts++
 			if attempts < 2 {
 				rw.WriteHeader(http.StatusBadGateway) // transient 502
@@ -192,7 +192,7 @@ func TestFetchGithubMod_Retries(t *testing.T) {
 
 	t.Run("TerminalErrorImmediateFail", func(t *testing.T) {
 		attempts := 0
-		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 			attempts++
 			rw.WriteHeader(http.StatusNotFound) // terminal 404
 		}))
