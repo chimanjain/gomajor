@@ -1,22 +1,78 @@
-package cmd
+package format
 
 import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"regexp"
+	"os"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/chimanjain/gomajor/pkg/engine"
 	"github.com/chimanjain/gomajor/utils"
 	"github.com/fatih/color"
+	"go.yaml.in/yaml/v3"
 )
 
-var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+// YAMLOutput defines the structured schema for the saved YAML output.
+type YAMLOutput struct {
+	Results []engine.SourceResult `yaml:"results" json:"results"`
+}
+
+func WriteReport(outputPath string, isJSON bool, results []engine.SourceResult) error {
+	outputData := YAMLOutput{Results: results}
+	var data []byte
+	var err error
+	formatName := "YAML"
+
+	if isJSON {
+		formatName = "JSON"
+		data, err = json.MarshalIndent(outputData, "", "  ")
+	} else {
+		data, err = yaml.Marshal(outputData)
+	}
+
+	if err == nil {
+		err = os.WriteFile(outputPath, data, 0o600)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to write %s output: %w", formatName, err)
+	}
+	fmt.Printf("Results written to %s file: %s\n", formatName, outputPath)
+	return nil
+}
+
+func PrintMultiJSONResults(w io.Writer, results []engine.SourceResult) error {
+	outputData := YAMLOutput{Results: results}
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(outputData)
+}
 
 func visualLen(s string) int {
-	cleaned := ansiRegex.ReplaceAllString(s, "")
-	return utf8.RuneCountInString(cleaned)
+	var count int
+	inEscape := false
+	for i := 0; i < len(s); {
+		if inEscape {
+			if s[i] == 'm' {
+				inEscape = false
+			}
+			i++
+			continue
+		}
+		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			inEscape = true
+			i += 2
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(s[i:])
+		if size == 0 {
+			break
+		}
+		count++
+		i += size
+	}
+	return count
 }
 
 func pad(s string, width int) string {
@@ -47,7 +103,7 @@ func printTable(w io.Writer, indent string, rows [][]string) {
 	}
 	header := []string{"MODULE", "CURRENT", "MINOR", "MAJOR", "NEW PATH"}
 	widths := make([]int, 5)
-	for col := 0; col < 4; col++ {
+	for col := range 4 {
 		maxW := visualLen(header[col])
 		for _, row := range rows {
 			wCol := visualLen(row[col])
@@ -82,7 +138,24 @@ func printTable(w io.Writer, indent string, rows [][]string) {
 	}
 }
 
-func printTextResults(w io.Writer, results []SourceResult, singleMode bool) {
+func printDependencies(w io.Writer, indent string, deps []engine.DependencyInfo) bool {
+	var rows [][]string
+	for _, dep := range deps {
+		if dep.HasUpdate || dep.HasMinorUpdate {
+			basePath, _, _ := utils.ParseModulePath(dep.Module)
+			rows = append(rows, formatRow(basePath, dep.CurrentVersion, dep.LatestMinorVersion, dep.HasMinorUpdate, dep.LatestMajorVersion, dep.LatestMajorPath, dep.HasUpdate))
+		}
+	}
+
+	if len(rows) == 0 {
+		_, _ = fmt.Fprintln(w, color.GreenString(indent+"✔ All checked dependencies are on their latest major versions."))
+		return false
+	}
+	printTable(w, indent, rows)
+	return true
+}
+
+func PrintTextResults(w io.Writer, results []engine.SourceResult, singleMode bool) {
 	if singleMode {
 		if len(results) == 0 {
 			return
@@ -93,20 +166,9 @@ func printTextResults(w io.Writer, results []SourceResult, singleMode bool) {
 			return
 		}
 
-		var rows [][]string
-		for _, dep := range res.Dependencies {
-			if dep.HasUpdate || dep.HasMinorUpdate {
-				basePath, _, _ := utils.ParseModulePath(dep.Module)
-				rows = append(rows, formatRow(basePath, dep.CurrentVersion, dep.LatestMinorVersion, dep.HasMinorUpdate, dep.LatestMajorVersion, dep.LatestMajorPath, dep.HasUpdate))
-			}
+		if printDependencies(w, "", res.Dependencies) {
+			_, _ = fmt.Fprintln(w)
 		}
-
-		if len(rows) == 0 {
-			_, _ = fmt.Fprintln(w, color.GreenString("✔ All checked dependencies are on their latest major versions."))
-			return
-		}
-		printTable(w, "", rows)
-		_, _ = fmt.Fprintln(w)
 	} else {
 		for i, res := range results {
 			if i > 0 {
@@ -118,37 +180,18 @@ func printTextResults(w io.Writer, results []SourceResult, singleMode bool) {
 				continue
 			}
 
-			var rows [][]string
-			for _, dep := range res.Dependencies {
-				if dep.HasUpdate || dep.HasMinorUpdate {
-					rows = append(rows, formatRow(dep.Module, dep.CurrentVersion, dep.LatestMinorVersion, dep.HasMinorUpdate, dep.LatestMajorVersion, dep.LatestMajorPath, dep.HasUpdate))
-				}
-			}
-
-			if len(rows) == 0 {
-				_, _ = fmt.Fprintln(w, color.GreenString("  ✔ All checked dependencies are on their latest major versions."))
-				continue
-			}
-
-			printTable(w, "  ", rows)
+			printDependencies(w, "  ", res.Dependencies)
 		}
 	}
 }
 
-func printAnalysisHeader(w io.Writer, count int, checkAll bool, path string) {
+func PrintAnalysisHeader(w io.Writer, count int, checkAll bool, path string) {
+	if w == nil {
+		return
+	}
 	msg := fmt.Sprintf("Analyzing %d direct dependencies", count)
 	if checkAll {
 		msg = fmt.Sprintf("Analyzing %d dependencies (direct and indirect)", count)
 	}
 	_, _ = fmt.Fprintf(w, "%s from %s...\n\n", color.HiCyanString(msg), color.HiBlackString(path))
-}
-
-func printMultiJSONResults(w io.Writer, results []SourceResult) error {
-	outputData := YAMLOutput{Results: results}
-	data, err := json.MarshalIndent(outputData, "", "  ")
-	if err != nil {
-		return err
-	}
-	_, _ = fmt.Fprintln(w, string(data))
-	return nil
 }

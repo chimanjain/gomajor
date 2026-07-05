@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +11,9 @@ import (
 	"testing"
 
 	"github.com/chimanjain/gomajor/checker"
+	"github.com/chimanjain/gomajor/pkg/config"
+	"github.com/chimanjain/gomajor/pkg/engine"
+	"github.com/chimanjain/gomajor/pkg/format"
 	"go.yaml.in/yaml/v3"
 	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
@@ -125,7 +127,7 @@ require github.com/foo/bar v1.0.0
 				}
 				defer server.Close()
 
-				cfg := &Config{
+				cfg := &config.Config{
 					ModFilePath: p,
 					CheckAll:    tt.checkAll,
 					MaxProbe:    tt.maxProbe,
@@ -163,7 +165,7 @@ require github.com/foo/bar v1.0.0
 		for _, tt := range tests {
 			t.Run(tt.ext, func(t *testing.T) {
 				outPath := filepath.Join(dir, "report"+tt.ext)
-				cfg := &Config{
+				cfg := &config.Config{
 					ModFilePath: p,
 					MaxProbe:    2,
 					OutputPath:  outPath,
@@ -179,7 +181,7 @@ require github.com/foo/bar v1.0.0
 					t.Fatalf("failed to read %s output: %v", tt.ext, err)
 				}
 
-				var output YAMLOutput
+				var output format.YAMLOutput
 				if tt.ext == ".json" {
 					err = json.Unmarshal(bytes, &output)
 				} else {
@@ -197,78 +199,84 @@ require github.com/foo/bar v1.0.0
 	})
 
 	t.Run("RunMultiChecker", func(t *testing.T) {
+		setupConfig := func(ext string) func(t *testing.T, dir string, serverURL string) (string, *config.Config) {
+			return func(t *testing.T, dir string, serverURL string) (string, *config.Config) {
+				localModPath := filepath.Join(dir, "local.mod")
+				localContent := localModContent
+				if err := os.WriteFile(localModPath, []byte(localContent), 0o644); err != nil {
+					t.Fatalf("os.WriteFile: %v", err)
+				}
+
+				configPath := filepath.Join(dir, "gomajor.yaml")
+				outputPath := filepath.Join(dir, "gomajor-report."+ext)
+
+				yamlCfg := config.YAMLConfig{
+					Local:  []string{localModPath},
+					Github: []string{serverURL + "/owner/repo/main/go.mod"},
+					Output: outputPath,
+				}
+				yamlBytes, err := yaml.Marshal(yamlCfg)
+				if err != nil {
+					t.Fatalf("yaml.Marshal: %v", err)
+				}
+				if err := os.WriteFile(configPath, yamlBytes, 0o644); err != nil {
+					t.Fatalf("os.WriteFile: %v", err)
+				}
+
+				return configPath, &config.Config{
+					MaxProbe:   2,
+					ConfigPath: configPath,
+				}
+			}
+		}
+
+		verifyConfig := func(t *testing.T, output format.YAMLOutput, _ string) {
+			localFound := false
+			for _, res := range output.Results {
+				if filepath.Base(res.Source) == "local.mod" {
+					localFound = true
+					if res.SourceType != localSource {
+						t.Errorf("source %s type = %q, want 'local'", res.Source, res.SourceType)
+					}
+					if len(res.Dependencies) != 1 {
+						t.Fatalf("expected 1 dependency for local, got %d", len(res.Dependencies))
+					}
+					dep := res.Dependencies[0]
+					if dep.Module != fooBarModule || dep.CurrentVersion != "v1.0.0" || dep.LatestMajorVersion != "v2.0.0" || !dep.HasUpdate {
+						t.Errorf("unexpected dependency info for local: %+v", dep)
+					}
+				}
+			}
+			if !localFound {
+				t.Error("local go.mod results not found in output")
+			}
+		}
+
 		tests := []struct {
 			name           string
 			wantJSONOutput bool
-			setup          func(t *testing.T, dir string, serverURL string) (configPath string, cfg *Config)
+			setup          func(t *testing.T, dir string, serverURL string) (configPath string, cfg *config.Config)
 			wantResultsLen int
-			verify         func(t *testing.T, output YAMLOutput, dir string)
+			verify         func(t *testing.T, output format.YAMLOutput, dir string)
 		}{
 			{
-				name: "ConfigYaml",
-				setup: func(t *testing.T, dir string, serverURL string) (string, *Config) {
-					localModPath := filepath.Join(dir, "local.mod")
-					localContent := localModContent
-					if err := os.WriteFile(localModPath, []byte(localContent), 0o644); err != nil {
-						t.Fatalf("os.WriteFile: %v", err)
-					}
-
-					configPath := filepath.Join(dir, "gomajor.yaml")
-					outputPath := filepath.Join(dir, "gomajor-report.yaml")
-
-					yamlCfg := YAMLConfig{
-						Local:  []string{localModPath},
-						Github: []string{serverURL + "/owner/repo/main/go.mod"},
-						Output: outputPath,
-					}
-					yamlBytes, err := yaml.Marshal(yamlCfg)
-					if err != nil {
-						t.Fatalf("yaml.Marshal: %v", err)
-					}
-					if err := os.WriteFile(configPath, yamlBytes, 0o644); err != nil {
-						t.Fatalf("os.WriteFile: %v", err)
-					}
-
-					return configPath, &Config{
-						MaxProbe:   2,
-						ConfigPath: configPath,
-					}
-				},
+				name:           "ConfigYaml",
+				setup:          setupConfig("yaml"),
 				wantResultsLen: 2,
-				verify: func(t *testing.T, output YAMLOutput, _ string) {
-					localFound := false
-					for _, res := range output.Results {
-						if filepath.Base(res.Source) == "local.mod" {
-							localFound = true
-							if res.SourceType != localSource {
-								t.Errorf("source %s type = %q, want 'local'", res.Source, res.SourceType)
-							}
-							if len(res.Dependencies) != 1 {
-								t.Fatalf("expected 1 dependency for local, got %d", len(res.Dependencies))
-							}
-							dep := res.Dependencies[0]
-							if dep.Module != fooBarModule || dep.CurrentVersion != "v1.0.0" || dep.LatestMajorVersion != "v2.0.0" || !dep.HasUpdate {
-								t.Errorf("unexpected dependency info for local: %+v", dep)
-							}
-						}
-					}
-					if !localFound {
-						t.Error("local go.mod results not found in output")
-					}
-				},
+				verify:         verifyConfig,
 			},
 			{
 				name: "GithubReposDirectly",
-				setup: func(_ *testing.T, dir string, serverURL string) (string, *Config) {
+				setup: func(_ *testing.T, dir string, serverURL string) (string, *config.Config) {
 					outputPath := filepath.Join(dir, "gomajor-report.yaml")
-					return "", &Config{
+					return "", &config.Config{
 						MaxProbe:    2,
 						GitHubRepos: []string{serverURL + "/owner/repo/main/go.mod"},
 						OutputPath:  outputPath,
 					}
 				},
 				wantResultsLen: 1,
-				verify: func(t *testing.T, output YAMLOutput, _ string) {
+				verify: func(t *testing.T, output format.YAMLOutput, _ string) {
 					res := output.Results[0]
 					if res.SourceType != githubSource {
 						t.Errorf("source type = %q, want 'github'", res.SourceType)
@@ -284,7 +292,7 @@ require github.com/foo/bar v1.0.0
 			},
 			{
 				name: "ConfigYaml_DisableOptions",
-				setup: func(t *testing.T, dir string, _ string) (string, *Config) {
+				setup: func(t *testing.T, dir string, _ string) (string, *config.Config) {
 					localModPath := filepath.Join(dir, "local.mod")
 					localContent := localModContent
 					if err := os.WriteFile(localModPath, []byte(localContent), 0o644); err != nil {
@@ -295,7 +303,7 @@ require github.com/foo/bar v1.0.0
 					outputPath := filepath.Join(dir, "gomajor-report.yaml")
 
 					disabled := false
-					yamlCfg := YAMLConfig{
+					yamlCfg := config.YAMLConfig{
 						Local:  []string{localModPath},
 						Output: outputPath,
 						Minor:  &disabled,
@@ -309,13 +317,13 @@ require github.com/foo/bar v1.0.0
 						t.Fatalf("os.WriteFile: %v", err)
 					}
 
-					return configPath, &Config{
+					return configPath, &config.Config{
 						MaxProbe:   2,
 						ConfigPath: configPath,
 					}
 				},
 				wantResultsLen: 1,
-				verify: func(t *testing.T, output YAMLOutput, _ string) {
+				verify: func(t *testing.T, output format.YAMLOutput, _ string) {
 					res := output.Results[0]
 					if len(res.Dependencies) != 1 {
 						t.Fatalf("expected 1 dependency for local, got %d", len(res.Dependencies))
@@ -329,60 +337,13 @@ require github.com/foo/bar v1.0.0
 			{
 				name:           "ConfigJson",
 				wantJSONOutput: true,
-				setup: func(t *testing.T, dir string, serverURL string) (string, *Config) {
-					localModPath := filepath.Join(dir, "local.mod")
-					localContent := localModContent
-					if err := os.WriteFile(localModPath, []byte(localContent), 0o644); err != nil {
-						t.Fatalf("os.WriteFile: %v", err)
-					}
-
-					configPath := filepath.Join(dir, "gomajor.yaml")
-					outputPath := filepath.Join(dir, "gomajor-report.json")
-
-					yamlCfg := YAMLConfig{
-						Local:  []string{localModPath},
-						Github: []string{serverURL + "/owner/repo/main/go.mod"},
-						Output: outputPath,
-					}
-					yamlBytes, err := yaml.Marshal(yamlCfg)
-					if err != nil {
-						t.Fatalf("yaml.Marshal: %v", err)
-					}
-					if err := os.WriteFile(configPath, yamlBytes, 0o644); err != nil {
-						t.Fatalf("os.WriteFile: %v", err)
-					}
-
-					return configPath, &Config{
-						MaxProbe:   2,
-						ConfigPath: configPath,
-					}
-				},
+				setup:          setupConfig("json"),
 				wantResultsLen: 2,
-				verify: func(t *testing.T, output YAMLOutput, _ string) {
-					localFound := false
-					for _, res := range output.Results {
-						if filepath.Base(res.Source) == "local.mod" {
-							localFound = true
-							if res.SourceType != localSource {
-								t.Errorf("source %s type = %q, want 'local'", res.Source, res.SourceType)
-							}
-							if len(res.Dependencies) != 1 {
-								t.Fatalf("expected 1 dependency for local, got %d", len(res.Dependencies))
-							}
-							dep := res.Dependencies[0]
-							if dep.Module != fooBarModule || dep.CurrentVersion != "v1.0.0" || dep.LatestMajorVersion != "v2.0.0" || !dep.HasUpdate {
-								t.Errorf("unexpected dependency info for local: %+v", dep)
-							}
-						}
-					}
-					if !localFound {
-						t.Error("local go.mod results not found in JSON output")
-					}
-				},
+				verify:         verifyConfig,
 			},
 			{
 				name: "DeduplicateSources",
-				setup: func(t *testing.T, dir string, serverURL string) (string, *Config) {
+				setup: func(t *testing.T, dir string, serverURL string) (string, *config.Config) {
 					localModPath := filepath.Join(dir, "local.mod")
 					localContent := localModContent
 					if err := os.WriteFile(localModPath, []byte(localContent), 0o644); err != nil {
@@ -392,7 +353,7 @@ require github.com/foo/bar v1.0.0
 					configPath := filepath.Join(dir, "gomajor.yaml")
 					outputPath := filepath.Join(dir, "gomajor-report.yaml")
 
-					yamlCfg := YAMLConfig{
+					yamlCfg := config.YAMLConfig{
 						Local:  []string{localModPath, localModPath},
 						Github: []string{serverURL + "/owner/repo/main/go.mod", serverURL + "/owner/repo/main/go.mod"},
 						Output: outputPath,
@@ -405,13 +366,13 @@ require github.com/foo/bar v1.0.0
 						t.Fatalf("os.WriteFile: %v", err)
 					}
 
-					return configPath, &Config{
+					return configPath, &config.Config{
 						MaxProbe:   2,
 						ConfigPath: configPath,
 					}
 				},
 				wantResultsLen: 2,
-				verify: func(t *testing.T, output YAMLOutput, _ string) {
+				verify: func(t *testing.T, output format.YAMLOutput, _ string) {
 					localCount := 0
 					githubCount := 0
 					for _, res := range output.Results {
@@ -432,17 +393,17 @@ require github.com/foo/bar v1.0.0
 			},
 			{
 				name: "SpaceAndCommaSeparatedGitHubRepos",
-				setup: func(_ *testing.T, dir string, serverURL string) (string, *Config) {
+				setup: func(_ *testing.T, dir string, serverURL string) (string, *config.Config) {
 					outputPath := filepath.Join(dir, "gomajor-report.yaml")
 					reposStr := fmt.Sprintf("%s/owner/repo/main/go.mod, %s/owner/repo/main/go.mod\t%s/owner/repo/main/go.mod", serverURL, serverURL, serverURL)
-					return "", &Config{
+					return "", &config.Config{
 						MaxProbe:    2,
 						GitHubRepos: []string{reposStr},
 						OutputPath:  outputPath,
 					}
 				},
 				wantResultsLen: 1,
-				verify: func(t *testing.T, output YAMLOutput, _ string) {
+				verify: func(t *testing.T, output format.YAMLOutput, _ string) {
 					if len(output.Results) != 1 {
 						t.Fatalf("expected 1 result, got %d", len(output.Results))
 					}
@@ -512,7 +473,7 @@ require github.com/foo/baz v1.0.0
 					t.Fatalf("failed to read output file: %v", err)
 				}
 
-				var output YAMLOutput
+				var output format.YAMLOutput
 				if tt.wantJSONOutput {
 					if err := json.Unmarshal(outContent, &output); err != nil {
 						t.Fatalf("failed to unmarshal output JSON: %v", err)
@@ -532,39 +493,6 @@ require github.com/foo/baz v1.0.0
 		}
 	})
 
-	t.Run("PrintMultiJsonResults", func(t *testing.T) {
-		results := []SourceResult{
-			{
-				Source:     "test-source",
-				SourceType: localSource,
-				Dependencies: []DependencyInfo{
-					{
-						Module:             fooBarModule,
-						CurrentVersion:     "v1.0.0",
-						LatestMajorVersion: "v2.0.0",
-						LatestMajorPath:    "github.com/foo/bar/v2",
-						HasUpdate:          true,
-					},
-				},
-			},
-		}
-
-		var buf bytes.Buffer
-		err := printMultiJSONResults(&buf, results)
-		if err != nil {
-			t.Fatalf("printMultiJSONResults failed: %v", err)
-		}
-
-		var output YAMLOutput
-		if err := json.Unmarshal(buf.Bytes(), &output); err != nil {
-			t.Fatalf("failed to unmarshal stdout JSON output: %v", err)
-		}
-
-		if len(output.Results) != 1 || output.Results[0].Source != "test-source" {
-			t.Errorf("unexpected output struct: %+v", output)
-		}
-	})
-
 	t.Run("CheckDependencies_Cancelled", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 			_ = json.NewEncoder(rw).Encode(map[string]string{versionKey: "v1.0.0"})
@@ -576,7 +504,7 @@ require github.com/foo/baz v1.0.0
 			ProxyBase:  server.URL,
 		}
 
-		cfg := &Config{
+		cfg := &config.Config{
 			Client:   client,
 			MaxProbe: 0,
 			Minor:    true,
@@ -597,40 +525,11 @@ require github.com/foo/baz v1.0.0
 			})
 		}
 
-		results := checkDependencies(ctx, cfg, reqs)
+		cfg.Client.HTTPClient = server.Client()
+		eng := engine.New(cfg)
+		results, _ := eng.CheckDependencies(ctx, reqs)
 		if len(results) != 0 {
 			t.Errorf("Expected 0 results for cancelled context, got %d", len(results))
-		}
-	})
-
-	t.Run("SanitizeURL", func(t *testing.T) {
-		tests := []struct {
-			input    string
-			expected string
-		}{
-			{
-				input:    "https://token:x-oauth-basic@github.com/owner/repo/go.mod",
-				expected: "https://redacted@github.com/owner/repo/go.mod",
-			},
-			{
-				input:    "https://user:password@git.internal.corp/project/go.mod",
-				expected: "https://redacted@git.internal.corp/project/go.mod",
-			},
-			{
-				input:    githubOwnerRepoURL,
-				expected: githubOwnerRepoURL,
-			},
-			{
-				input:    "/run/media/chiman/Data/github/gomajor/go.mod",
-				expected: "/run/media/chiman/Data/github/gomajor/go.mod",
-			},
-		}
-
-		for _, tt := range tests {
-			got := sanitizeURL(tt.input)
-			if got != tt.expected {
-				t.Errorf("sanitizeURL(%q) = %q, want %q", tt.input, got, tt.expected)
-			}
 		}
 	})
 }

@@ -1,71 +1,121 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
 
-	"github.com/chimanjain/gomajor/checker"
+	"github.com/chimanjain/gomajor/pkg/config"
 	"github.com/spf13/cobra"
 )
 
-// DefaultConfig returns a config with standard settings.
-func DefaultConfig() *Config {
-	return &Config{
-		ModFilePath: "",
-		MaxProbe:    5,
-		CheckAll:    false,
-		JSONOutput:  false,
-		NoColor:     false,
-		Minor:       true,
-		Major:       true,
-		Client:      checker.DefaultClient(),
-		ConfigPath:  "",
-		OutputPath:  "",
-		GitHubRepos: nil,
-		Out:         os.Stdout,
-		Err:         os.Stderr,
-	}
-}
-
 // Version is the current version of gomajor.
-const Version = "v1.6.0"
+const Version = "v1.7.0"
 
-var config = DefaultConfig()
+var rootCmd = NewRootCmd()
 
-var rootCmd = &cobra.Command{
-	Use:     "gomajor",
-	Version: Version,
-	Short:   "Checks for major version updates of Go modules",
-	Long: `A tool that parses a go.mod file and checks the Go proxy 
+func NewRootCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "gomajor",
+		Version: Version,
+		Short:   "Checks for major version updates of Go modules",
+		Long: `A tool that parses a go.mod file and checks the Go proxy 
 to discover if there are newer major versions (e.g. v2 -> v3) 
 available for your dependencies.`,
-	Run: func(cmd *cobra.Command, _ []string) {
-		config.Client.DisableMinor = !config.Minor
-		config.Client.DisableMajor = !config.Major
-		runChecker(cmd.Context(), cmd.Flags().Changed("file"), cmd.Flags().Changed("config"), cmd.Flags().Changed("output"))
-	},
+		Run: func(cmd *cobra.Command, _ []string) {
+			cfg, err := parseConfig(cmd)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "Error parsing configuration:", err)
+				os.Exit(1)
+			}
+			cfg.Client.DisableMinor = !cfg.Minor
+			cfg.Client.DisableMajor = !cfg.Major
+
+			handler := slog.NewTextHandler(cfg.Err, &slog.HandlerOptions{
+				Level: slog.LevelInfo,
+			})
+			cfg.Logger = slog.New(handler)
+
+			runChecker(cmd.Context(), cfg, cmd.Flags().Changed("file"), cmd.Flags().Changed("config"), cmd.Flags().Changed("output"))
+		},
+	}
+
+	cmd.SetVersionTemplate("{{.Version}}\n")
+	cmd.Flags().StringP("file", "f", "", "Path to the go.mod file (default: auto-detect in current directory or binary directory)")
+	cmd.Flags().IntP("max-probe", "m", 5, "Maximum number of subsequent major versions to probe for")
+	cmd.Flags().BoolP("all", "a", false, "Check all dependencies, including indirect ones (by default only direct dependencies are checked)")
+	cmd.Flags().Bool("json", false, "Output results in JSON format")
+	cmd.Flags().Bool("no-color", false, "Disable color output")
+	cmd.Flags().Bool("minor", true, "Check for minor updates within the current major version")
+	cmd.Flags().Bool("major", true, "Check for major version upgrades")
+	cmd.Flags().StringP("config", "c", "", "Path to the YAML configuration file (default: auto-detects 'gomajor.yaml' in current directory)")
+	cmd.Flags().StringP("output", "o", "", "Path to save results in YAML or JSON format (defaults to 'gomajor-report.yaml' or 'gomajor-report.json' if outputting to a file, otherwise printed to terminal)")
+	cmd.Flags().StringSliceP("github", "g", nil, "Check GitHub repositories directly (comma or space-separated)")
+
+	return cmd
+}
+
+func parseConfig(cmd *cobra.Command) (*config.Config, error) {
+	cfg := config.DefaultConfig()
+	var err error
+
+	cfg.ModFilePath, err = cmd.Flags().GetString("file")
+	if err != nil {
+		return nil, err
+	}
+	cfg.MaxProbe, err = cmd.Flags().GetInt("max-probe")
+	if err != nil {
+		return nil, err
+	}
+	cfg.CheckAll, err = cmd.Flags().GetBool("all")
+	if err != nil {
+		return nil, err
+	}
+	cfg.JSONOutput, err = cmd.Flags().GetBool("json")
+	if err != nil {
+		return nil, err
+	}
+	cfg.NoColor, err = cmd.Flags().GetBool("no-color")
+	if err != nil {
+		return nil, err
+	}
+	cfg.Minor, err = cmd.Flags().GetBool("minor")
+	if err != nil {
+		return nil, err
+	}
+	cfg.Major, err = cmd.Flags().GetBool("major")
+	if err != nil {
+		return nil, err
+	}
+	cfg.ConfigPath, err = cmd.Flags().GetString("config")
+	if err != nil {
+		return nil, err
+	}
+	cfg.OutputPath, err = cmd.Flags().GetString("output")
+	if err != nil {
+		return nil, err
+	}
+	cfg.GitHubRepos, err = cmd.Flags().GetStringSlice("github")
+	if err != nil {
+		return nil, err
+	}
+
+	return cfg, nil
 }
 
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
+	err := func() error {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
+		return rootCmd.ExecuteContext(ctx)
+	}()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-}
-
-func init() {
-	rootCmd.SetVersionTemplate("{{.Version}}\n")
-	rootCmd.Flags().StringVarP(&config.ModFilePath, "file", "f", "", "Path to the go.mod file (default: auto-detect in current directory or binary directory)")
-	rootCmd.Flags().IntVarP(&config.MaxProbe, "max-probe", "m", 5, "Maximum number of subsequent major versions to probe for")
-	rootCmd.Flags().BoolVarP(&config.CheckAll, "all", "a", false, "Check all dependencies, including indirect ones (by default only direct dependencies are checked)")
-	rootCmd.Flags().BoolVar(&config.JSONOutput, "json", false, "Output results in JSON format")
-	rootCmd.Flags().BoolVar(&config.NoColor, "no-color", false, "Disable color output")
-	rootCmd.Flags().BoolVar(&config.Minor, "minor", true, "Check for minor updates within the current major version")
-	rootCmd.Flags().BoolVar(&config.Major, "major", true, "Check for major version upgrades")
-	rootCmd.Flags().StringVarP(&config.ConfigPath, "config", "c", "", "Path to the YAML configuration file (default: auto-detects 'gomajor.yaml' in current directory)")
-	rootCmd.Flags().StringVarP(&config.OutputPath, "output", "o", "", "Path to save results in YAML or JSON format (defaults to 'gomajor-report.yaml' or 'gomajor-report.json' if outputting to a file, otherwise printed to terminal)")
-	rootCmd.Flags().StringSliceVarP(&config.GitHubRepos, "github", "g", nil, "Check GitHub repositories directly (comma or space-separated)")
 }
 
 // resolveModFile returns the path to use for go.mod, auto-discovering it when

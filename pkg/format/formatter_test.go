@@ -1,11 +1,13 @@
-package cmd
+package format
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"strings"
 	"testing"
 
+	"github.com/chimanjain/gomajor/pkg/engine"
 	"github.com/fatih/color"
 )
 
@@ -89,4 +91,37 @@ func TestFormatter(t *testing.T) {
 			t.Errorf("unexpected table output: %q", out)
 		}
 	})
+}
+
+func TestPrintMultiJsonResults(t *testing.T) {
+	results := []engine.SourceResult{
+		{
+			Source:     "test-source",
+			SourceType: "local",
+			Dependencies: []engine.DependencyInfo{
+				{
+					Module:             "github.com/foo/bar",
+					CurrentVersion:     "v1.0.0",
+					LatestMajorVersion: "v2.0.0",
+					LatestMajorPath:    "github.com/foo/bar/v2",
+					HasUpdate:          true,
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := PrintMultiJSONResults(&buf, results)
+	if err != nil {
+		t.Fatalf("PrintMultiJSONResults failed: %v", err)
+	}
+
+	var output YAMLOutput
+	if err := json.Unmarshal(buf.Bytes(), &output); err != nil {
+		t.Fatalf("failed to unmarshal stdout JSON output: %v", err)
+	}
+
+	if len(output.Results) != 1 || output.Results[0].Source != "test-source" {
+		t.Errorf("unexpected output struct: %+v", output)
+	}
 }
