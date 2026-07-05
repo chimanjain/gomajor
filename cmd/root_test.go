@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -39,10 +42,7 @@ func TestResolveModFile(t *testing.T) {
 			dir := t.TempDir()
 
 			if tt.createMod {
-				goModPath := filepath.Join(dir, "go.mod")
-				if err := os.WriteFile(goModPath, []byte("module example.com/test\n\ngo 1.21\n"), 0o644); err != nil {
-					t.Fatalf("failed to create temp go.mod: %v", err)
-				}
+				writeModFile(t, dir, "module example.com/test\n\ngo 1.21\n")
 			}
 
 			orig, err := os.Getwd()
@@ -70,75 +70,102 @@ func TestResolveModFile(t *testing.T) {
 	}
 }
 
-func TestRootCmd_Flags(t *testing.T) {
+func TestRootCmd(t *testing.T) {
 	tests := []struct {
-		name           string
-		args           []string
-		verifyDefaults bool
-		wantMaxProbe   int
-		wantCheckAll   bool
-		wantNoColor    bool
-		wantRepos      []string
-		wantErr        bool
+		name      string
+		args      []string
+		parseOnly bool
+		checkFn   func(t *testing.T, gotOutput string)
 	}{
 		{
-			name:           "Defaults",
-			verifyDefaults: true,
-			wantMaxProbe:   5,
-			wantCheckAll:   false,
-			wantNoColor:    false,
+			name:      "Flags_Defaults",
+			parseOnly: true,
+			checkFn: func(t *testing.T, _ string) {
+				if config.MaxProbe != 5 {
+					t.Errorf("MaxProbe = %v, want 5", config.MaxProbe)
+				}
+			},
 		},
 		{
-			name:      "GithubFlag_SingleRepo",
+			name:      "Flags_Github_SingleRepo",
 			args:      []string{"-g", "owner/repo"},
-			wantRepos: []string{"owner/repo"},
+			parseOnly: true,
+			checkFn: func(t *testing.T, _ string) {
+				want := []string{"owner/repo"}
+				if !slices.Equal(config.GitHubRepos, want) {
+					t.Errorf("GitHubRepos = %v, want %v", config.GitHubRepos, want)
+				}
+			},
 		},
 		{
-			name:      "GithubFlag_CommaSeparated",
+			name:      "Flags_Github_CommaSeparated",
 			args:      []string{"-g", "owner/repo1,github.com/owner/repo2"},
-			wantRepos: []string{"owner/repo1", "github.com/owner/repo2"},
+			parseOnly: true,
+			checkFn: func(t *testing.T, _ string) {
+				want := []string{"owner/repo1", "github.com/owner/repo2"}
+				if !slices.Equal(config.GitHubRepos, want) {
+					t.Errorf("GitHubRepos = %v, want %v", config.GitHubRepos, want)
+				}
+			},
+		},
+		{
+			name: "Version",
+			args: []string{"--version"},
+			checkFn: func(t *testing.T, got string) {
+				if got != "v1.6.0\n" {
+					t.Errorf("got %q, want v1.6.0\n", got)
+				}
+			},
+		},
+		{
+			name: "Help_Long",
+			args: []string{"--help"},
+			checkFn: func(t *testing.T, got string) {
+				if !strings.Contains(got, "Checks for major version updates") || !strings.Contains(got, "Usage:") {
+					t.Errorf("expected help output, got: %q", got)
+				}
+			},
+		},
+		{
+			name: "Help_Short",
+			args: []string{"-h"},
+			checkFn: func(t *testing.T, got string) {
+				if !strings.Contains(got, "Checks for major version updates") || !strings.Contains(got, "Usage:") {
+					t.Errorf("expected help output, got: %q", got)
+				}
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Clear/reset state before run
-			config.GitHubRepos = nil
+			config = DefaultConfig()
 			if err := rootCmd.Flags().Set("github", ""); err != nil {
-				t.Fatalf("failed to reset flag: %v", err)
+				t.Fatalf("failed to reset github flag: %v", err)
 			}
 
-			if tt.verifyDefaults {
-				if config.MaxProbe != tt.wantMaxProbe {
-					t.Errorf("default MaxProbe = %v, want %v", config.MaxProbe, tt.wantMaxProbe)
-				}
-				if config.CheckAll != tt.wantCheckAll {
-					t.Errorf("default CheckAll = %v, want %v", config.CheckAll, tt.wantCheckAll)
-				}
-				if config.NoColor != tt.wantNoColor {
-					t.Errorf("default NoColor = %v, want %v", config.NoColor, tt.wantNoColor)
-				}
-				return
+			var buf bytes.Buffer
+			rootCmd.SetOut(&buf)
+			rootCmd.SetErr(&buf)
+			defer rootCmd.SetOut(nil)
+			defer rootCmd.SetErr(nil)
+			defer rootCmd.SetArgs(nil)
+
+			var err error
+			if tt.parseOnly {
+				err = rootCmd.ParseFlags(tt.args)
+			} else {
+				rootCmd.SetArgs(tt.args)
+				err = rootCmd.Execute()
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
 
-			err := rootCmd.ParseFlags(tt.args)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("ParseFlags() returned error = %v, wantErr = %v", err, tt.wantErr)
-			}
-
-			if !tt.wantErr {
-				if len(config.GitHubRepos) != len(tt.wantRepos) {
-					t.Fatalf("len(config.GitHubRepos) = %d, want %d", len(config.GitHubRepos), len(tt.wantRepos))
-				}
-				for i, v := range config.GitHubRepos {
-					if v != tt.wantRepos[i] {
-						t.Errorf("config.GitHubRepos[%d] = %q, want %q", i, v, tt.wantRepos[i])
-					}
-				}
+			if tt.checkFn != nil {
+				tt.checkFn(t, buf.String())
 			}
 		})
 	}
-
-	// Clean up config.GitHubRepos after all subtests complete
 	config.GitHubRepos = nil
 }

@@ -78,6 +78,8 @@ gomajor -o report.json
 | `--output` | `-o` | Save results to a structured YAML or JSON report file (format auto-detected via file extension, e.g., `.json` or `.yaml`) | `""` | `gomajor -o report.json` |
 | `--json` | | Format reports and stdout data in JSON | `false` | `gomajor --json` |
 | `--no-color` | | Suppress ANSI colored terminal formatting | `false` | `gomajor --no-color` |
+| `--version` | `-v` | Print the version of gomajor | `false` | `gomajor -v` |
+| `--help` | `-h` | Print help information | `false` | `gomajor -h` |
 
 ### Multi-Source Checking (`gomajor.yaml`)
 
