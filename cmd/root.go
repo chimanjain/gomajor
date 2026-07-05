@@ -28,11 +28,15 @@ func DefaultConfig() *Config {
 	}
 }
 
+// Version is the current version of gomajor.
+const Version = "v1.6.0"
+
 var config = DefaultConfig()
 
 var rootCmd = &cobra.Command{
-	Use:   "gomajor",
-	Short: "Checks for major version updates of Go modules",
+	Use:     "gomajor",
+	Version: Version,
+	Short:   "Checks for major version updates of Go modules",
 	Long: `A tool that parses a go.mod file and checks the Go proxy 
 to discover if there are newer major versions (e.g. v2 -> v3) 
 available for your dependencies.`,
@@ -51,6 +55,7 @@ func Execute() {
 }
 
 func init() {
+	rootCmd.SetVersionTemplate("{{.Version}}\n")
 	rootCmd.Flags().StringVarP(&config.ModFilePath, "file", "f", "", "Path to the go.mod file (default: auto-detect in current directory or binary directory)")
 	rootCmd.Flags().IntVarP(&config.MaxProbe, "max-probe", "m", 5, "Maximum number of subsequent major versions to probe for")
 	rootCmd.Flags().BoolVarP(&config.CheckAll, "all", "a", false, "Check all dependencies, including indirect ones (by default only direct dependencies are checked)")
