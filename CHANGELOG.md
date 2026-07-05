@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [1.7.0] - 2026-07-05
+
+### Added
+
+- **Cobra-based CLI Flags**: Added native `--version` / `-v` and `--help` / `-h` command-line flags.
+- **Viper Configuration Management**: Integrated the `spf13/viper` library to load configuration files robustly.
+
+### Changed
+
+- **Architectural Refactoring**: Migrated core file-parsing, source-fetching, and formatting logic from root command files to designated library packages under the `pkg/` directory (`pkg/config`, `pkg/constants`, `pkg/engine`, `pkg/format`, `pkg/source`).
+
+---
+
 ## [1.6.0] - 2026-07-01
 
 ### Added
