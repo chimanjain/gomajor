@@ -57,6 +57,7 @@ func TestUtils(t *testing.T) {
 			want     string
 		}{
 			{"Standard", testUserGoModule, 3, "/", testUserGoModuleV3},
+			{"Standard v1", testUserGoModule, 1, "/", testUserGoModule},
 			{"Gopkg.in", testYamlGopkg, 3, ".", "gopkg.in/yaml.v3"},
 			{"DefaultSep", testUserGoModule, 3, "", testUserGoModuleV3},
 		}
@@ -95,4 +96,47 @@ func TestUtils(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("NormalizeSplitString", func(t *testing.T) {
+		tests := []struct {
+			name  string
+			input string
+			want  []string
+		}{
+			{"Empty", "", nil},
+			{"Simple comma", "a,b", []string{"a", "b"}},
+			{"Simple space", "a b", []string{"a", "b"}},
+			{"Mixed separators", "a, b\tc\nd\re", []string{"a", "b", "c", "d", "e"}},
+			{"Extra spaces and commas", " , a , , b , ", []string{"a", "b"}},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				got := NormalizeSplitString(tt.input)
+				if len(got) != len(tt.want) {
+					t.Fatalf("NormalizeSplitString(%q) length = %d, want %d (got=%v, want=%v)", tt.input, len(got), len(tt.want), got, tt.want)
+				}
+				for i := range got {
+					if got[i] != tt.want[i] {
+						t.Errorf("NormalizeSplitString(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
+					}
+				}
+			})
+		}
+	})
+}
+
+func BenchmarkParseModulePath(b *testing.B) {
+	paths := []string{
+		"github.com/user/gomodule/v2",
+		"gopkg.in/yaml.v2",
+		"github.com/google/uuid",
+		"github.com/foo/bar/v10",
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, p := range paths {
+			_, _, _ = ParseModulePath(p)
+		}
+	}
 }

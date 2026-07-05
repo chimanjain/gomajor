@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 // writeModFile is a test helper that writes a go.mod file to dir and returns its path.
@@ -75,14 +77,18 @@ func TestRootCmd(t *testing.T) {
 		name      string
 		args      []string
 		parseOnly bool
-		checkFn   func(t *testing.T, gotOutput string)
+		checkFn   func(t *testing.T, cmd *cobra.Command, gotOutput string)
 	}{
 		{
 			name:      "Flags_Defaults",
 			parseOnly: true,
-			checkFn: func(t *testing.T, _ string) {
-				if config.MaxProbe != 5 {
-					t.Errorf("MaxProbe = %v, want 5", config.MaxProbe)
+			checkFn: func(t *testing.T, cmd *cobra.Command, _ string) {
+				cfg, err := parseConfig(cmd)
+				if err != nil {
+					t.Fatalf("parseConfig: %v", err)
+				}
+				if cfg.MaxProbe != 5 {
+					t.Errorf("MaxProbe = %v, want 5", cfg.MaxProbe)
 				}
 			},
 		},
@@ -90,10 +96,14 @@ func TestRootCmd(t *testing.T) {
 			name:      "Flags_Github_SingleRepo",
 			args:      []string{"-g", "owner/repo"},
 			parseOnly: true,
-			checkFn: func(t *testing.T, _ string) {
+			checkFn: func(t *testing.T, cmd *cobra.Command, _ string) {
+				cfg, err := parseConfig(cmd)
+				if err != nil {
+					t.Fatalf("parseConfig: %v", err)
+				}
 				want := []string{"owner/repo"}
-				if !slices.Equal(config.GitHubRepos, want) {
-					t.Errorf("GitHubRepos = %v, want %v", config.GitHubRepos, want)
+				if !slices.Equal(cfg.GitHubRepos, want) {
+					t.Errorf("GitHubRepos = %v, want %v", cfg.GitHubRepos, want)
 				}
 			},
 		},
@@ -101,27 +111,31 @@ func TestRootCmd(t *testing.T) {
 			name:      "Flags_Github_CommaSeparated",
 			args:      []string{"-g", "owner/repo1,github.com/owner/repo2"},
 			parseOnly: true,
-			checkFn: func(t *testing.T, _ string) {
+			checkFn: func(t *testing.T, cmd *cobra.Command, _ string) {
+				cfg, err := parseConfig(cmd)
+				if err != nil {
+					t.Fatalf("parseConfig: %v", err)
+				}
 				want := []string{"owner/repo1", "github.com/owner/repo2"}
-				if !slices.Equal(config.GitHubRepos, want) {
-					t.Errorf("GitHubRepos = %v, want %v", config.GitHubRepos, want)
+				if !slices.Equal(cfg.GitHubRepos, want) {
+					t.Errorf("GitHubRepos = %v, want %v", cfg.GitHubRepos, want)
 				}
 			},
 		},
 		{
 			name: "Version",
 			args: []string{"--version"},
-			checkFn: func(t *testing.T, got string) {
-				if got != "v1.6.0\n" {
-					t.Errorf("got %q, want v1.6.0\n", got)
+			checkFn: func(t *testing.T, _ *cobra.Command, got string) {
+				if got != "v1.7.0\n" {
+					t.Errorf("got %q, want v1.7.0\n", got)
 				}
 			},
 		},
 		{
 			name: "Help_Long",
 			args: []string{"--help"},
-			checkFn: func(t *testing.T, got string) {
-				if !strings.Contains(got, "Checks for major version updates") || !strings.Contains(got, "Usage:") {
+			checkFn: func(t *testing.T, _ *cobra.Command, got string) {
+				if !strings.Contains(got, "A tool that parses a go.mod file") || !strings.Contains(got, "Usage:") {
 					t.Errorf("expected help output, got: %q", got)
 				}
 			},
@@ -129,8 +143,8 @@ func TestRootCmd(t *testing.T) {
 		{
 			name: "Help_Short",
 			args: []string{"-h"},
-			checkFn: func(t *testing.T, got string) {
-				if !strings.Contains(got, "Checks for major version updates") || !strings.Contains(got, "Usage:") {
+			checkFn: func(t *testing.T, _ *cobra.Command, got string) {
+				if !strings.Contains(got, "A tool that parses a go.mod file") || !strings.Contains(got, "Usage:") {
 					t.Errorf("expected help output, got: %q", got)
 				}
 			},
@@ -139,33 +153,26 @@ func TestRootCmd(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config = DefaultConfig()
-			if err := rootCmd.Flags().Set("github", ""); err != nil {
-				t.Fatalf("failed to reset github flag: %v", err)
-			}
+			cmd := NewRootCmd()
 
 			var buf bytes.Buffer
-			rootCmd.SetOut(&buf)
-			rootCmd.SetErr(&buf)
-			defer rootCmd.SetOut(nil)
-			defer rootCmd.SetErr(nil)
-			defer rootCmd.SetArgs(nil)
+			cmd.SetOut(&buf)
+			cmd.SetErr(&buf)
 
 			var err error
 			if tt.parseOnly {
-				err = rootCmd.ParseFlags(tt.args)
+				err = cmd.ParseFlags(tt.args)
 			} else {
-				rootCmd.SetArgs(tt.args)
-				err = rootCmd.Execute()
+				cmd.SetArgs(tt.args)
+				err = cmd.Execute()
 			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
 			if tt.checkFn != nil {
-				tt.checkFn(t, buf.String())
+				tt.checkFn(t, cmd, buf.String())
 			}
 		})
 	}
-	config.GitHubRepos = nil
 }

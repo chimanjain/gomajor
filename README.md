@@ -199,12 +199,3 @@ results:
 ```bash
 go test -cover ./...
 ```
-
-### Architecture
-
-- **`checker`**: Core engine for querying the Go Module Proxy.
-- **`utils`**: Centralized, zero-dependency package for Go module path parsing, version path formatting, and proxy path escaping.
-- **`cmd`**: Decoupled CLI architecture built with Cobra:
-  - `runner.go`: Core execution flow routing and concurrent proxy checking.
-  - `formatter.go` / `types.go`: Output visualization and reporting structures.
-  - `github.go` / `root.go`: Remote path parsing and Cobra commands bootstrapping.
