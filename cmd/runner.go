@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/chimanjain/gomajor/pkg/config"
@@ -12,19 +14,11 @@ import (
 	"github.com/chimanjain/gomajor/pkg/format"
 	"github.com/chimanjain/gomajor/utils"
 	"github.com/fatih/color"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/viper"
 )
 
-func runChecker(ctx context.Context, cfg *config.Config, fileExplicit, configExplicit, outputExplicit bool) {
-	if err := runCheckerWithConfig(ctx, cfg, fileExplicit, configExplicit, outputExplicit); err != nil {
-		if cfg.Logger != nil {
-			cfg.Logger.Error("Execution failed", "error", err)
-		} else {
-			_, _ = fmt.Fprintln(cfg.Err, "Error:", err)
-		}
-		os.Exit(1)
-	}
-}
+const jsonExt = ".json"
 
 func runCheckerWithConfig(ctx context.Context, cfg *config.Config, fileExplicit, configExplicit, outputExplicit bool) error {
 	if cfg.Out == nil {
@@ -48,6 +42,15 @@ func runCheckerWithConfig(ctx context.Context, cfg *config.Config, fileExplicit,
 	cfg.GitHubRepos = normalizeGitHubRepos(cfg.GitHubRepos)
 	configPath := resolveConfigPath(cfg, configExplicit)
 	singleMode := configPath == "" && len(cfg.GitHubRepos) == 0
+
+	if cfg.Err == os.Stderr && isatty.IsTerminal(os.Stderr.Fd()) && !cfg.JSONOutput {
+		cfg.OnProgress = func(completed, total int) {
+			fmt.Fprintf(cfg.Err, "\r%s [%d/%d]", color.HiBlackString("Checking dependencies..."), completed, total)
+			if completed == total {
+				fmt.Fprintln(cfg.Err)
+			}
+		}
+	}
 
 	eng := engine.New(cfg)
 	var results []engine.SourceResult
@@ -80,12 +83,17 @@ func loadViperConfig(cfg *config.Config, configPath string, configExplicit bool)
 	v := viper.New()
 	if configPath != "" {
 		v.SetConfigFile(configPath)
-		if err := v.ReadInConfig(); err == nil {
+		if err := v.ReadInConfig(); err != nil {
+			var notFoundErr viper.ConfigFileNotFoundError
+			isNotFound := errors.As(err, &notFoundErr) || os.IsNotExist(err)
+
+			if configExplicit || !isNotFound {
+				return yamlCfg, fmt.Errorf("reading config file %s: %w", configPath, err)
+			}
+		} else {
 			if err := v.Unmarshal(&yamlCfg); err != nil {
 				return yamlCfg, fmt.Errorf("parsing config: %w", err)
 			}
-		} else if configExplicit {
-			return yamlCfg, fmt.Errorf("reading config file %s: %w", configPath, err)
 		}
 	}
 
@@ -129,7 +137,7 @@ func executeSingleSource(ctx context.Context, eng *engine.Engine, cfg *config.Co
 
 func writeOutput(cfg *config.Config, results []engine.SourceResult, outputExplicit, singleMode bool) error {
 	outputPath := cfg.OutputPath
-	isJSON := cfg.JSONOutput || strings.HasSuffix(outputPath, ".json") || strings.HasSuffix(outputPath, ".JSON")
+	isJSON := cfg.JSONOutput || strings.ToLower(filepath.Ext(outputPath)) == jsonExt
 
 	if outputExplicit && outputPath == "" {
 		if isJSON {
@@ -140,7 +148,7 @@ func writeOutput(cfg *config.Config, results []engine.SourceResult, outputExplic
 	}
 
 	if outputPath != "" {
-		return format.WriteReport(outputPath, isJSON, results)
+		return format.WriteReport(cfg.Out, outputPath, isJSON, results)
 	}
 
 	if cfg.JSONOutput {

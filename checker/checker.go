@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -38,7 +40,61 @@ type Client struct {
 	sem         chan struct{}
 }
 
-// DefaultClient returns a client with standard settings.
+// Option configures a Client.
+type Option func(*Client)
+
+// WithHTTPClient sets a custom HTTP client.
+func WithHTTPClient(hc *http.Client) Option {
+	return func(c *Client) { c.HTTPClient = hc }
+}
+
+// WithProxyURLs sets the ordered list of Go module proxy URLs.
+func WithProxyURLs(urls []string) Option {
+	return func(c *Client) {
+		c.ProxyURLs = urls
+		if len(urls) > 0 {
+			c.ProxyBase = urls[0]
+		}
+	}
+}
+
+// WithDisableMinor disables minor version checking.
+func WithDisableMinor(b bool) Option {
+	return func(c *Client) { c.DisableMinor = b }
+}
+
+// WithDisableMajor disables major version checking.
+func WithDisableMajor(b bool) Option {
+	return func(c *Client) { c.DisableMajor = b }
+}
+
+// WithConcurrencyLimit sets the maximum number of concurrent HTTP requests.
+func WithConcurrencyLimit(n int) Option {
+	return func(c *Client) {
+		if n > 0 {
+			c.sem = make(chan struct{}, n)
+		}
+	}
+}
+
+// NewClient creates a Client with default settings, then applies opts.
+func NewClient(opts ...Option) *Client {
+	c := &Client{
+		HTTPClient: &http.Client{
+			Timeout: constants.HTTPTimeout,
+		},
+		ProxyBase: defaultProxy,
+		ProxyURLs: []string{defaultProxy},
+		sem:       make(chan struct{}, constants.CheckerConcurrencyLimit),
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
+
+// DefaultClient returns a client configured from environment variables
+// (GOPROXY) with production-grade HTTP transport settings.
 func DefaultClient() *Client {
 	proxy := os.Getenv("GOPROXY")
 	if proxy == "" {
@@ -48,20 +104,28 @@ func DefaultClient() *Client {
 	var proxyURLs []string
 	proxy = strings.ReplaceAll(proxy, "|", ",")
 	parts := strings.SplitSeq(proxy, ",")
+	var containsFallback bool
+	var fallbackVal string
 	for p := range parts {
 		p = strings.TrimSpace(p)
 		if p != "" {
 			p = strings.TrimRight(p, "/")
 			if p == directProxy || p == offProxy {
-				slog.Warn("GOPROXY value not supported for major version discovery, falling back",
-					"value", p, "fallback", defaultProxy)
-				proxyURLs = append(proxyURLs, defaultProxy)
+				containsFallback = true
+				fallbackVal = p
 			} else {
-				proxyURLs = append(proxyURLs, p)
+				alreadyPresent := slices.Contains(proxyURLs, p)
+				if !alreadyPresent {
+					proxyURLs = append(proxyURLs, p)
+				}
 			}
 		}
 	}
 	if len(proxyURLs) == 0 {
+		if containsFallback {
+			slog.Warn("GOPROXY value not supported for major version discovery, falling back",
+				"value", fallbackVal, "fallback", defaultProxy)
+		}
 		proxyURLs = []string{defaultProxy}
 	}
 
@@ -73,17 +137,13 @@ func DefaultClient() *Client {
 		transport = cloned
 	}
 
-	c := &Client{
-		HTTPClient: &http.Client{
+	return NewClient(
+		WithHTTPClient(&http.Client{
 			Timeout:   constants.HTTPTimeout,
 			Transport: transport,
-		},
-		ProxyBase: proxyURLs[0],
-		ProxyURLs: proxyURLs,
-		sem:       make(chan struct{}, constants.CheckerConcurrencyLimit),
-	}
-
-	return c
+		}),
+		WithProxyURLs(proxyURLs),
+	)
 }
 
 func (c *Client) lazyInit() {
@@ -132,20 +192,23 @@ type ModuleInfo struct {
 	HasMinorUpdate bool
 }
 
-var privateGlobs = func() string {
+// getPrivateGlobs reads GONOPROXY / GOPRIVATE lazily on each call so that
+// changes made after package init (e.g., t.Setenv in tests) are respected.
+func getPrivateGlobs() string {
 	globs := os.Getenv("GONOPROXY")
 	if globs == "" {
 		globs = os.Getenv("GOPRIVATE")
 	}
 	return globs
-}()
+}
 
 // isPrivateModule checks if the module path matches GOPRIVATE or GONOPROXY environment variables.
 func isPrivateModule(modPath string) bool {
-	if privateGlobs == "" {
+	globs := getPrivateGlobs()
+	if globs == "" {
 		return false
 	}
-	return module.MatchPrefixPatterns(privateGlobs, modPath)
+	return module.MatchPrefixPatterns(globs, modPath)
 }
 
 // latestVersion returns the latest released version for a module path from the
@@ -205,7 +268,7 @@ func (c *Client) fetchLatestVersion(ctx context.Context, modPath string) (string
 	}
 	defer func() { <-sem }()
 
-	escaped, err := utils.EscapePath(modPath)
+	escaped, err := module.EscapePath(modPath)
 	if err != nil {
 		return "", false
 	}
@@ -325,6 +388,17 @@ func (c *Client) FindLatestMajor(ctx context.Context, basePath string, currentMa
 // Check analyses a single module (path + version from go.mod) and returns a ModuleInfo.
 func (c *Client) Check(ctx context.Context, modPath, modVersion string, maxProbe int) ModuleInfo {
 	basePath, currentMajor, sep := utils.ParseModulePath(modPath)
+	if semver.IsValid(modVersion) {
+		majorStr := semver.Major(modVersion)
+		if len(majorStr) > 1 && majorStr[0] == 'v' {
+			if mv, err := strconv.Atoi(majorStr[1:]); err == nil {
+				if mv > currentMajor {
+					currentMajor = mv
+				}
+			}
+		}
+	}
+
 	info := ModuleInfo{
 		Current:        modPath,
 		CurrentVersion: modVersion,
@@ -356,8 +430,8 @@ func (c *Client) Check(ctx context.Context, modPath, modVersion string, maxProbe
 }
 
 // Check is a convenience function that uses the default client.
-func Check(modPath, modVersion string, maxProbe int) ModuleInfo {
-	return getDefaultClient().Check(context.Background(), modPath, modVersion, maxProbe)
+func Check(ctx context.Context, modPath, modVersion string, maxProbe int) ModuleInfo {
+	return getDefaultClient().Check(ctx, modPath, modVersion, maxProbe)
 }
 
 // Close closes the idle HTTP connections of the client.

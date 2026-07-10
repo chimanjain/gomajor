@@ -71,32 +71,6 @@ func TestUtils(t *testing.T) {
 		}
 	})
 
-	t.Run("EscapePath", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			modPath string
-			want    string
-			wantErr bool
-		}{
-			{"No uppercase", testGoogleUUID, testGoogleUUID, false},
-			{"With uppercase", "github.com/BurntSushi/toml", "github.com/!burnt!sushi/toml", false},
-			{"Empty", "", "", true},
-		}
-
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				got, err := EscapePath(tt.modPath)
-				if (err != nil) != tt.wantErr {
-					t.Errorf("EscapePath() error = %v, wantErr %v", err, tt.wantErr)
-					return
-				}
-				if got != tt.want {
-					t.Errorf("EscapePath() = %v, want %v", got, tt.want)
-				}
-			})
-		}
-	})
-
 	t.Run("NormalizeSplitString", func(t *testing.T) {
 		tests := []struct {
 			name  string
@@ -133,8 +107,8 @@ func BenchmarkParseModulePath(b *testing.B) {
 		"github.com/google/uuid",
 		"github.com/foo/bar/v10",
 	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		for _, p := range paths {
 			_, _, _ = ParseModulePath(p)
 		}

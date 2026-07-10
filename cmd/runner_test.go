@@ -158,7 +158,7 @@ require github.com/foo/bar v1.0.0
 		tests := []struct {
 			ext string
 		}{
-			{".json"},
+			{jsonExt},
 			{".yaml"},
 		}
 
@@ -182,7 +182,7 @@ require github.com/foo/bar v1.0.0
 				}
 
 				var output format.YAMLOutput
-				if tt.ext == ".json" {
+				if tt.ext == jsonExt {
 					err = json.Unmarshal(bytes, &output)
 				} else {
 					err = yaml.Unmarshal(bytes, &output)
@@ -530,6 +530,40 @@ require github.com/foo/baz v1.0.0
 		results, _ := eng.CheckDependencies(ctx, reqs)
 		if len(results) != 0 {
 			t.Errorf("Expected 0 results for cancelled context, got %d", len(results))
+		}
+	})
+
+	t.Run("ImplicitConfigParseError", func(t *testing.T) {
+		dir := t.TempDir()
+		configPath := filepath.Join(dir, "gomajor.yaml")
+		if err := os.WriteFile(configPath, []byte("malformed: yaml: :"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile: %v", err)
+		}
+
+		origCwd, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("os.Getwd: %v", err)
+		}
+		if err := os.Chdir(dir); err != nil {
+			t.Fatalf("os.Chdir: %v", err)
+		}
+		defer func() {
+			_ = os.Chdir(origCwd)
+		}()
+
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+			rw.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		cfg := &config.Config{
+			ConfigPath: "",
+			Client:     &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
+		}
+
+		err = runCheckerWithConfig(context.Background(), cfg, false, false, false)
+		if err == nil {
+			t.Fatal("expected error parsing malformed implicit config, got nil")
 		}
 	})
 }

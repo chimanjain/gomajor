@@ -25,6 +25,7 @@ type Config struct {
 	Out         io.Writer
 	Err         io.Writer
 	Logger      *slog.Logger
+	OnProgress  func(completed, total int)
 }
 
 // YAMLConfig defines the structure for the configuration YAML file.

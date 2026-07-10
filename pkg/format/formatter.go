@@ -19,7 +19,7 @@ type YAMLOutput struct {
 	Results []engine.SourceResult `yaml:"results" json:"results"`
 }
 
-func WriteReport(outputPath string, isJSON bool, results []engine.SourceResult) error {
+func WriteReport(w io.Writer, outputPath string, isJSON bool, results []engine.SourceResult) error {
 	outputData := YAMLOutput{Results: results}
 	var data []byte
 	var err error
@@ -38,7 +38,7 @@ func WriteReport(outputPath string, isJSON bool, results []engine.SourceResult) 
 	if err != nil {
 		return fmt.Errorf("failed to write %s output: %w", formatName, err)
 	}
-	fmt.Printf("Results written to %s file: %s\n", formatName, outputPath)
+	fmt.Fprintf(w, "Results written to %s file: %s\n", formatName, outputPath)
 	return nil
 }
 
