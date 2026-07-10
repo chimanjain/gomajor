@@ -158,7 +158,7 @@ require github.com/foo/bar v1.0.0
 		tests := []struct {
 			ext string
 		}{
-			{".json"},
+			{jsonExt},
 			{".yaml"},
 		}
 
@@ -182,7 +182,7 @@ require github.com/foo/bar v1.0.0
 				}
 
 				var output format.YAMLOutput
-				if tt.ext == ".json" {
+				if tt.ext == jsonExt {
 					err = json.Unmarshal(bytes, &output)
 				} else {
 					err = yaml.Unmarshal(bytes, &output)

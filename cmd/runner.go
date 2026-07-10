@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/viper"
 )
 
+const jsonExt = ".json"
 
 func runCheckerWithConfig(ctx context.Context, cfg *config.Config, fileExplicit, configExplicit, outputExplicit bool) error {
 	if cfg.Out == nil {
@@ -136,7 +137,7 @@ func executeSingleSource(ctx context.Context, eng *engine.Engine, cfg *config.Co
 
 func writeOutput(cfg *config.Config, results []engine.SourceResult, outputExplicit, singleMode bool) error {
 	outputPath := cfg.OutputPath
-	isJSON := cfg.JSONOutput || strings.ToLower(filepath.Ext(outputPath)) == ".json"
+	isJSON := cfg.JSONOutput || strings.ToLower(filepath.Ext(outputPath)) == jsonExt
 
 	if outputExplicit && outputPath == "" {
 		if isJSON {
