@@ -33,12 +33,24 @@ available for your dependencies.`,
 			cfg.Client.DisableMinor = !cfg.Minor
 			cfg.Client.DisableMajor = !cfg.Major
 
+			logLevel := slog.LevelInfo
+			if cfg.Verbose {
+				logLevel = slog.LevelDebug
+			}
 			handler := slog.NewTextHandler(cfg.Err, &slog.HandlerOptions{
-				Level: slog.LevelInfo,
+				Level: logLevel,
 			})
 			cfg.Logger = slog.New(handler)
 
-			return runCheckerWithConfig(cmd.Context(), cfg, cmd.Flags().Changed("file"), cmd.Flags().Changed("config"), cmd.Flags().Changed("output"))
+			return runCheckerWithConfig(
+				cmd.Context(),
+				cfg,
+				cmd.Flags().Changed("file"),
+				cmd.Flags().Changed("config"),
+				cmd.Flags().Changed("output"),
+				cmd.Flags().Changed("minor"),
+				cmd.Flags().Changed("major"),
+			)
 		},
 	}
 
@@ -50,6 +62,7 @@ available for your dependencies.`,
 	cmd.Flags().Bool("no-color", false, "Disable color output")
 	cmd.Flags().Bool("minor", true, "Check for minor updates within the current major version")
 	cmd.Flags().Bool("major", true, "Check for major version upgrades")
+	cmd.Flags().Bool("verbose", false, "Enable verbose/debug log output")
 	cmd.Flags().StringP("config", "c", "", "Path to the YAML configuration file (default: auto-detects 'gomajor.yaml' in current directory)")
 	cmd.Flags().StringP("output", "o", "", "Path to save results in YAML or JSON format (defaults to 'gomajor-report.yaml' or 'gomajor-report.json' if outputting to a file, otherwise printed to terminal)")
 	cmd.Flags().StringSliceP("github", "g", nil, "Check GitHub repositories directly (comma or space-separated)")
@@ -98,6 +111,10 @@ func parseConfig(cmd *cobra.Command) (*config.Config, error) {
 		return nil, err
 	}
 	cfg.GitHubRepos, err = cmd.Flags().GetStringSlice("github")
+	if err != nil {
+		return nil, err
+	}
+	cfg.Verbose, err = cmd.Flags().GetBool("verbose")
 	if err != nil {
 		return nil, err
 	}

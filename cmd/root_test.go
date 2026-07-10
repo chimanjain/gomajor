@@ -149,6 +149,20 @@ func TestRootCmd(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:      "Flags_Verbose",
+			args:      []string{"--verbose"},
+			parseOnly: true,
+			checkFn: func(t *testing.T, cmd *cobra.Command, _ string) {
+				cfg, err := parseConfig(cmd)
+				if err != nil {
+					t.Fatalf("parseConfig: %v", err)
+				}
+				if !cfg.Verbose {
+					t.Errorf("Verbose = %v, want true", cfg.Verbose)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {

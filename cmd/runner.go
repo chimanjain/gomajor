@@ -20,7 +20,7 @@ import (
 
 const jsonExt = ".json"
 
-func runCheckerWithConfig(ctx context.Context, cfg *config.Config, fileExplicit, configExplicit, outputExplicit bool) error {
+func runCheckerWithConfig(ctx context.Context, cfg *config.Config, fileExplicit, configExplicit, outputExplicit, minorExplicit, majorExplicit bool) error {
 	if cfg.Out == nil {
 		cfg.Out = io.Discard
 	}
@@ -57,7 +57,7 @@ func runCheckerWithConfig(ctx context.Context, cfg *config.Config, fileExplicit,
 	var err error
 
 	if !singleMode {
-		yamlCfg, err := loadViperConfig(cfg, configPath, configExplicit)
+		yamlCfg, err := loadViperConfig(cfg, configPath, configExplicit, minorExplicit, majorExplicit)
 		if err != nil {
 			return err
 		}
@@ -78,7 +78,7 @@ func runCheckerWithConfig(ctx context.Context, cfg *config.Config, fileExplicit,
 	return writeOutput(cfg, results, outputExplicit, singleMode)
 }
 
-func loadViperConfig(cfg *config.Config, configPath string, configExplicit bool) (config.YAMLConfig, error) {
+func loadViperConfig(cfg *config.Config, configPath string, configExplicit, minorExplicit, majorExplicit bool) (config.YAMLConfig, error) {
 	var yamlCfg config.YAMLConfig
 	v := viper.New()
 	if configPath != "" {
@@ -98,12 +98,16 @@ func loadViperConfig(cfg *config.Config, configPath string, configExplicit bool)
 	}
 
 	if yamlCfg.Minor != nil {
-		cfg.Minor = *yamlCfg.Minor
-		cfg.Client.DisableMinor = !cfg.Minor
+		if !minorExplicit {
+			cfg.Minor = *yamlCfg.Minor
+			cfg.Client.DisableMinor = !cfg.Minor
+		}
 	}
 	if yamlCfg.Major != nil {
-		cfg.Major = *yamlCfg.Major
-		cfg.Client.DisableMajor = !cfg.Major
+		if !majorExplicit {
+			cfg.Major = *yamlCfg.Major
+			cfg.Client.DisableMajor = !cfg.Major
+		}
 	}
 
 	if len(cfg.GitHubRepos) > 0 {
