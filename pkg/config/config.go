@@ -18,6 +18,7 @@ type Config struct {
 	NoColor     bool
 	Minor       bool
 	Major       bool
+	Verbose     bool
 	Client      *checker.Client
 	ConfigPath  string
 	OutputPath  string
@@ -47,6 +48,7 @@ func DefaultConfig() *Config {
 		NoColor:     false,
 		Minor:       true,
 		Major:       true,
+		Verbose:     false,
 		Client:      checker.DefaultClient(),
 		ConfigPath:  "",
 		OutputPath:  "",

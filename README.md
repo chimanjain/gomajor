@@ -5,7 +5,6 @@
 </p>
 
 <p align="center">
-  <a href="https://goreportcard.com/report/github.com/chimanjain/gomajor"><img src="https://goreportcard.com/badge/github.com/chimanjain/gomajor" alt="Go Report Card"></a>
   <a href="https://pkg.go.dev/github.com/chimanjain/gomajor"><img src="https://pkg.go.dev/badge/github.com/chimanjain/gomajor.svg" alt="Go Reference"></a>
 </p>
 
@@ -35,7 +34,9 @@ Standard commands like `go list -m -u all` are great for finding minor updates, 
 ```bash
 # Install instantly
 go install github.com/chimanjain/gomajor@latest
+```
 
+```bash
 # Or build from source
 git clone https://github.com/chimanjain/gomajor.git && cd gomajor && go build -o gomajor
 ```
@@ -78,6 +79,7 @@ gomajor -o report.json
 | `--output` | `-o` | Save results to a structured YAML or JSON report file (format auto-detected via file extension, e.g., `.json` or `.yaml`) | `""` | `gomajor -o report.json` |
 | `--json` | | Format reports and stdout data in JSON | `false` | `gomajor --json` |
 | `--no-color` | | Suppress ANSI colored terminal formatting | `false` | `gomajor --no-color` |
+| `--verbose` | | Enable verbose/debug log output | `false` | `gomajor --verbose` |
 | `--version` | `-v` | Print the version of gomajor | `false` | `gomajor -v` |
 | `--help` | `-h` | Print help information | `false` | `gomajor -h` |
 
@@ -188,14 +190,4 @@ results:
     }
   ]
 }
-```
-
----
-
-## Development & Architecture
-
-### Testing
-
-```bash
-go test -cover ./...
 ```

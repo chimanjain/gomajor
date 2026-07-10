@@ -134,7 +134,7 @@ require github.com/foo/bar v1.0.0
 					Client:      &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
 				}
 
-				err := runCheckerWithConfig(context.Background(), cfg, true, tt.jsonOutput, false)
+				err := runCheckerWithConfig(context.Background(), cfg, true, tt.jsonOutput, false, false, false)
 				if (err != nil) != tt.wantErr {
 					t.Fatalf("runCheckerWithConfig() returned error = %v, wantErr = %v", err, tt.wantErr)
 				}
@@ -172,7 +172,7 @@ require github.com/foo/bar v1.0.0
 					Client:      &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
 				}
 
-				if err := runCheckerWithConfig(context.Background(), cfg, true, false, true); err != nil {
+				if err := runCheckerWithConfig(context.Background(), cfg, true, false, true, false, false); err != nil {
 					t.Fatalf("runCheckerWithConfig failed for %s: %v", tt.ext, err)
 				}
 
@@ -459,7 +459,7 @@ require github.com/foo/baz v1.0.0
 					}
 				}
 
-				err := runCheckerWithConfig(context.Background(), testConfig, false, false, true)
+				err := runCheckerWithConfig(context.Background(), testConfig, false, false, true, false, false)
 				if err != nil {
 					t.Fatalf("runCheckerWithConfig failed: %v", err)
 				}
@@ -561,9 +561,76 @@ require github.com/foo/baz v1.0.0
 			Client:     &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
 		}
 
-		err = runCheckerWithConfig(context.Background(), cfg, false, false, false)
+		err = runCheckerWithConfig(context.Background(), cfg, false, false, false, false, false)
 		if err == nil {
 			t.Fatal("expected error parsing malformed implicit config, got nil")
+		}
+	})
+
+	t.Run("CliPrecedence", func(t *testing.T) {
+		dir := t.TempDir()
+		p := writeModFile(t, dir, "module example.com/test\ngo 1.21\nrequire github.com/foo/bar v1.0.0\n")
+
+		configPath := filepath.Join(dir, "gomajor.yaml")
+		configContent := fmt.Sprintf(`
+local:
+  - %s
+minor: false
+major: false
+`, p)
+		if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
+				_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
+			} else {
+				rw.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer server.Close()
+
+		// case 1: minorExplicit and majorExplicit are true (CLI passed --minor=true --major=true)
+		// We expect the CLI values (true, true) to override the config file values (false, false)
+		cfg := &config.Config{
+			ModFilePath: p,
+			ConfigPath:  configPath,
+			Minor:       true,
+			Major:       true,
+			MaxProbe:    2,
+			Client:      &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
+		}
+		err := runCheckerWithConfig(context.Background(), cfg, true, true, false, true, true)
+		if err != nil {
+			t.Fatalf("runCheckerWithConfig failed: %v", err)
+		}
+		if !cfg.Minor {
+			t.Error("expected cfg.Minor to remain true (CLI precedence), but got false")
+		}
+		if !cfg.Major {
+			t.Error("expected cfg.Major to remain true (CLI precedence), but got false")
+		}
+
+		// case 2: minorExplicit and majorExplicit are false (CLI defaults/not explicitly passed)
+		// We expect config values (false, false) to override defaults.
+		cfg2 := &config.Config{
+			ModFilePath: p,
+			ConfigPath:  configPath,
+			Minor:       true,
+			Major:       true,
+			MaxProbe:    2,
+			Client:      &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
+		}
+		err = runCheckerWithConfig(context.Background(), cfg2, true, true, false, false, false)
+		if err != nil {
+			t.Fatalf("runCheckerWithConfig failed: %v", err)
+		}
+		if cfg2.Minor {
+			t.Error("expected cfg2.Minor to become false (config file took precedence), but got true")
+		}
+		if cfg2.Major {
+			t.Error("expected cfg2.Major to become false (config file took precedence), but got true")
 		}
 	})
 }
