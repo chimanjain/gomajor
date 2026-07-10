@@ -83,7 +83,7 @@ func TestRootCmd(t *testing.T) {
 			name:      "Flags_Defaults",
 			parseOnly: true,
 			checkFn: func(t *testing.T, cmd *cobra.Command, _ string) {
-				cfg, err := parseConfig(cmd)
+				cfg, _, err := parseConfig(cmd)
 				if err != nil {
 					t.Fatalf("parseConfig: %v", err)
 				}
@@ -97,7 +97,7 @@ func TestRootCmd(t *testing.T) {
 			args:      []string{"-g", "owner/repo"},
 			parseOnly: true,
 			checkFn: func(t *testing.T, cmd *cobra.Command, _ string) {
-				cfg, err := parseConfig(cmd)
+				cfg, _, err := parseConfig(cmd)
 				if err != nil {
 					t.Fatalf("parseConfig: %v", err)
 				}
@@ -112,7 +112,7 @@ func TestRootCmd(t *testing.T) {
 			args:      []string{"-g", "owner/repo1,github.com/owner/repo2"},
 			parseOnly: true,
 			checkFn: func(t *testing.T, cmd *cobra.Command, _ string) {
-				cfg, err := parseConfig(cmd)
+				cfg, _, err := parseConfig(cmd)
 				if err != nil {
 					t.Fatalf("parseConfig: %v", err)
 				}
@@ -126,8 +126,8 @@ func TestRootCmd(t *testing.T) {
 			name: "Version",
 			args: []string{"--version"},
 			checkFn: func(t *testing.T, _ *cobra.Command, got string) {
-				if got != "v1.7.0\n" {
-					t.Errorf("got %q, want v1.7.0\n", got)
+				if got != "v1.8.0\n" {
+					t.Errorf("got %q, want v1.8.0\n", got)
 				}
 			},
 		},
@@ -154,7 +154,7 @@ func TestRootCmd(t *testing.T) {
 			args:      []string{"--verbose"},
 			parseOnly: true,
 			checkFn: func(t *testing.T, cmd *cobra.Command, _ string) {
-				cfg, err := parseConfig(cmd)
+				cfg, _, err := parseConfig(cmd)
 				if err != nil {
 					t.Fatalf("parseConfig: %v", err)
 				}

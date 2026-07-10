@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,10 +11,11 @@ import (
 
 	"github.com/chimanjain/gomajor/pkg/config"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 // Version is the current version of gomajor.
-const Version = "v1.7.0"
+const Version = "v1.8.0"
 
 var rootCmd = NewRootCmd()
 
@@ -26,7 +28,7 @@ func NewRootCmd() *cobra.Command {
 to discover if there are newer major versions (e.g. v2 -> v3) 
 available for your dependencies.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := parseConfig(cmd)
+			cfg, yamlCfg, err := parseConfig(cmd)
 			if err != nil {
 				return fmt.Errorf("error parsing configuration: %w", err)
 			}
@@ -42,15 +44,8 @@ available for your dependencies.`,
 			})
 			cfg.Logger = slog.New(handler)
 
-			return runCheckerWithConfig(
-				cmd.Context(),
-				cfg,
-				cmd.Flags().Changed("file"),
-				cmd.Flags().Changed("config"),
-				cmd.Flags().Changed("output"),
-				cmd.Flags().Changed("minor"),
-				cmd.Flags().Changed("major"),
-			)
+			singleMode := cfg.ConfigPath == "" && len(cfg.GitHubRepos) == 0 && len(yamlCfg.Local) == 0 && len(yamlCfg.Github) == 0
+			return runCheckerWithConfig(cmd.Context(), cfg, yamlCfg, singleMode)
 		},
 	}
 
@@ -70,56 +65,68 @@ available for your dependencies.`,
 	return cmd
 }
 
-func parseConfig(cmd *cobra.Command) (*config.Config, error) {
+func parseConfig(cmd *cobra.Command) (*config.Config, config.YAMLConfig, error) {
+	v := viper.New()
+	if err := v.BindPFlags(cmd.Flags()); err != nil {
+		return nil, config.YAMLConfig{}, err
+	}
+
+	configPath := v.GetString("config")
+	configExplicit := cmd.Flags().Changed("config")
+
+	if !configExplicit && configPath == "" {
+		if _, err := os.Stat("gomajor.yaml"); err == nil {
+			configPath = "gomajor.yaml"
+		}
+	}
+
+	var fileYamlCfg config.YAMLConfig
+	if configPath != "" {
+		v.SetConfigFile(configPath)
+		if err := v.ReadInConfig(); err != nil {
+			var notFoundErr viper.ConfigFileNotFoundError
+			isNotFound := errors.As(err, &notFoundErr) || os.IsNotExist(err)
+			if configExplicit || !isNotFound {
+				return nil, config.YAMLConfig{}, fmt.Errorf("reading config file %s: %w", configPath, err)
+			}
+		} else {
+			vFile := viper.New()
+			vFile.SetConfigFile(configPath)
+			if err := vFile.ReadInConfig(); err == nil {
+				_ = vFile.Unmarshal(&fileYamlCfg)
+			}
+		}
+	}
+
 	cfg := config.DefaultConfig()
-	var err error
-
-	cfg.ModFilePath, err = cmd.Flags().GetString("file")
-	if err != nil {
-		return nil, err
-	}
-	cfg.MaxProbe, err = cmd.Flags().GetInt("max-probe")
-	if err != nil {
-		return nil, err
-	}
-	cfg.CheckAll, err = cmd.Flags().GetBool("all")
-	if err != nil {
-		return nil, err
-	}
-	cfg.JSONOutput, err = cmd.Flags().GetBool("json")
-	if err != nil {
-		return nil, err
-	}
-	cfg.NoColor, err = cmd.Flags().GetBool("no-color")
-	if err != nil {
-		return nil, err
-	}
-	cfg.Minor, err = cmd.Flags().GetBool("minor")
-	if err != nil {
-		return nil, err
-	}
-	cfg.Major, err = cmd.Flags().GetBool("major")
-	if err != nil {
-		return nil, err
-	}
-	cfg.ConfigPath, err = cmd.Flags().GetString("config")
-	if err != nil {
-		return nil, err
-	}
-	cfg.OutputPath, err = cmd.Flags().GetString("output")
-	if err != nil {
-		return nil, err
-	}
-	cfg.GitHubRepos, err = cmd.Flags().GetStringSlice("github")
-	if err != nil {
-		return nil, err
-	}
-	cfg.Verbose, err = cmd.Flags().GetBool("verbose")
-	if err != nil {
-		return nil, err
+	cfg.ModFilePath = v.GetString("file")
+	cfg.MaxProbe = v.GetInt("max-probe")
+	cfg.CheckAll = v.GetBool("all")
+	cfg.JSONOutput = v.GetBool("json")
+	cfg.NoColor = v.GetBool("no-color")
+	cfg.Minor = v.GetBool("minor")
+	cfg.Major = v.GetBool("major")
+	cfg.Verbose = v.GetBool("verbose")
+	cfg.ConfigPath = configPath
+	cfg.OutputPath = v.GetString("output")
+	if cmd.Flags().Changed("output") && cfg.OutputPath == "" {
+		if cfg.JSONOutput {
+			cfg.OutputPath = "gomajor-report.json"
+		} else {
+			cfg.OutputPath = "gomajor-report.yaml"
+		}
 	}
 
-	return cfg, nil
+	cliGithub, _ := cmd.Flags().GetStringSlice("github")
+	cfg.GitHubRepos = cliGithub
+
+	yamlCfg := config.YAMLConfig{
+		Local:  fileYamlCfg.Local,
+		Github: append(fileYamlCfg.Github, cliGithub...),
+		Output: cfg.OutputPath,
+	}
+
+	return cfg, yamlCfg, nil
 }
 
 func Execute() {

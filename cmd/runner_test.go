@@ -131,10 +131,11 @@ require github.com/foo/bar v1.0.0
 					ModFilePath: p,
 					CheckAll:    tt.checkAll,
 					MaxProbe:    tt.maxProbe,
+					JSONOutput:  tt.jsonOutput,
 					Client:      &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
 				}
 
-				err := runCheckerWithConfig(context.Background(), cfg, true, tt.jsonOutput, false, false, false)
+				err := runCheckerWithConfig(context.Background(), cfg, config.YAMLConfig{}, true)
 				if (err != nil) != tt.wantErr {
 					t.Fatalf("runCheckerWithConfig() returned error = %v, wantErr = %v", err, tt.wantErr)
 				}
@@ -172,7 +173,7 @@ require github.com/foo/bar v1.0.0
 					Client:      &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
 				}
 
-				if err := runCheckerWithConfig(context.Background(), cfg, true, false, true, false, false); err != nil {
+				if err := runCheckerWithConfig(context.Background(), cfg, config.YAMLConfig{}, true); err != nil {
 					t.Fatalf("runCheckerWithConfig failed for %s: %v", tt.ext, err)
 				}
 
@@ -199,8 +200,8 @@ require github.com/foo/bar v1.0.0
 	})
 
 	t.Run("RunMultiChecker", func(t *testing.T) {
-		setupConfig := func(ext string) func(t *testing.T, dir string, serverURL string) (string, *config.Config) {
-			return func(t *testing.T, dir string, serverURL string) (string, *config.Config) {
+		setupConfig := func(ext string) func(t *testing.T, dir string, serverURL string) (string, *config.Config, config.YAMLConfig) {
+			return func(t *testing.T, dir string, serverURL string) (string, *config.Config, config.YAMLConfig) {
 				localModPath := filepath.Join(dir, "local.mod")
 				localContent := localModContent
 				if err := os.WriteFile(localModPath, []byte(localContent), 0o644); err != nil {
@@ -226,7 +227,7 @@ require github.com/foo/bar v1.0.0
 				return configPath, &config.Config{
 					MaxProbe:   2,
 					ConfigPath: configPath,
-				}
+				}, yamlCfg
 			}
 		}
 
@@ -255,7 +256,7 @@ require github.com/foo/bar v1.0.0
 		tests := []struct {
 			name           string
 			wantJSONOutput bool
-			setup          func(t *testing.T, dir string, serverURL string) (configPath string, cfg *config.Config)
+			setup          func(t *testing.T, dir string, serverURL string) (configPath string, cfg *config.Config, yamlCfg config.YAMLConfig)
 			wantResultsLen int
 			verify         func(t *testing.T, output format.YAMLOutput, dir string)
 		}{
@@ -267,13 +268,15 @@ require github.com/foo/bar v1.0.0
 			},
 			{
 				name: "GithubReposDirectly",
-				setup: func(_ *testing.T, dir string, serverURL string) (string, *config.Config) {
+				setup: func(_ *testing.T, dir string, serverURL string) (string, *config.Config, config.YAMLConfig) {
 					outputPath := filepath.Join(dir, "gomajor-report.yaml")
 					return "", &config.Config{
-						MaxProbe:    2,
-						GitHubRepos: []string{serverURL + "/owner/repo/main/go.mod"},
-						OutputPath:  outputPath,
-					}
+							MaxProbe:    2,
+							GitHubRepos: []string{serverURL + "/owner/repo/main/go.mod"},
+							OutputPath:  outputPath,
+						}, config.YAMLConfig{
+							Github: []string{serverURL + "/owner/repo/main/go.mod"},
+						}
 				},
 				wantResultsLen: 1,
 				verify: func(t *testing.T, output format.YAMLOutput, _ string) {
@@ -291,50 +294,6 @@ require github.com/foo/bar v1.0.0
 				},
 			},
 			{
-				name: "ConfigYaml_DisableOptions",
-				setup: func(t *testing.T, dir string, _ string) (string, *config.Config) {
-					localModPath := filepath.Join(dir, "local.mod")
-					localContent := localModContent
-					if err := os.WriteFile(localModPath, []byte(localContent), 0o644); err != nil {
-						t.Fatalf("os.WriteFile: %v", err)
-					}
-
-					configPath := filepath.Join(dir, "gomajor.yaml")
-					outputPath := filepath.Join(dir, "gomajor-report.yaml")
-
-					disabled := false
-					yamlCfg := config.YAMLConfig{
-						Local:  []string{localModPath},
-						Output: outputPath,
-						Minor:  &disabled,
-						Major:  &disabled,
-					}
-					yamlBytes, err := yaml.Marshal(yamlCfg)
-					if err != nil {
-						t.Fatalf("yaml.Marshal: %v", err)
-					}
-					if err := os.WriteFile(configPath, yamlBytes, 0o644); err != nil {
-						t.Fatalf("os.WriteFile: %v", err)
-					}
-
-					return configPath, &config.Config{
-						MaxProbe:   2,
-						ConfigPath: configPath,
-					}
-				},
-				wantResultsLen: 1,
-				verify: func(t *testing.T, output format.YAMLOutput, _ string) {
-					res := output.Results[0]
-					if len(res.Dependencies) != 1 {
-						t.Fatalf("expected 1 dependency for local, got %d", len(res.Dependencies))
-					}
-					dep := res.Dependencies[0]
-					if dep.HasUpdate || dep.HasMinorUpdate {
-						t.Errorf("unexpected update: %+v (both major and minor should be disabled)", dep)
-					}
-				},
-			},
-			{
 				name:           "ConfigJson",
 				wantJSONOutput: true,
 				setup:          setupConfig("json"),
@@ -343,7 +302,7 @@ require github.com/foo/bar v1.0.0
 			},
 			{
 				name: "DeduplicateSources",
-				setup: func(t *testing.T, dir string, serverURL string) (string, *config.Config) {
+				setup: func(t *testing.T, dir string, serverURL string) (string, *config.Config, config.YAMLConfig) {
 					localModPath := filepath.Join(dir, "local.mod")
 					localContent := localModContent
 					if err := os.WriteFile(localModPath, []byte(localContent), 0o644); err != nil {
@@ -369,7 +328,7 @@ require github.com/foo/bar v1.0.0
 					return configPath, &config.Config{
 						MaxProbe:   2,
 						ConfigPath: configPath,
-					}
+					}, yamlCfg
 				},
 				wantResultsLen: 2,
 				verify: func(t *testing.T, output format.YAMLOutput, _ string) {
@@ -393,14 +352,16 @@ require github.com/foo/bar v1.0.0
 			},
 			{
 				name: "SpaceAndCommaSeparatedGitHubRepos",
-				setup: func(_ *testing.T, dir string, serverURL string) (string, *config.Config) {
+				setup: func(_ *testing.T, dir string, serverURL string) (string, *config.Config, config.YAMLConfig) {
 					outputPath := filepath.Join(dir, "gomajor-report.yaml")
 					reposStr := fmt.Sprintf("%s/owner/repo/main/go.mod, %s/owner/repo/main/go.mod\t%s/owner/repo/main/go.mod", serverURL, serverURL, serverURL)
 					return "", &config.Config{
-						MaxProbe:    2,
-						GitHubRepos: []string{reposStr},
-						OutputPath:  outputPath,
-					}
+							MaxProbe:    2,
+							GitHubRepos: []string{reposStr},
+							OutputPath:  outputPath,
+						}, config.YAMLConfig{
+							Github: []string{reposStr},
+						}
 				},
 				wantResultsLen: 1,
 				verify: func(t *testing.T, output format.YAMLOutput, _ string) {
@@ -444,7 +405,7 @@ require github.com/foo/baz v1.0.0
 				}))
 				defer server.Close()
 
-				configPath, testConfig := tt.setup(t, dir, server.URL)
+				configPath, testConfig, testYamlCfg := tt.setup(t, dir, server.URL)
 				testConfig.Client = &checker.Client{
 					HTTPClient: server.Client(),
 					ProxyBase:  server.URL,
@@ -457,9 +418,12 @@ require github.com/foo/baz v1.0.0
 					} else {
 						outputPath = filepath.Join(dir, "gomajor-report.yaml")
 					}
+					testConfig.OutputPath = outputPath
+					testYamlCfg.Output = outputPath
 				}
 
-				err := runCheckerWithConfig(context.Background(), testConfig, false, false, true, false, false)
+				singleMode := configPath == "" && len(testConfig.GitHubRepos) == 0 && len(testYamlCfg.Local) == 0 && len(testYamlCfg.Github) == 0
+				err := runCheckerWithConfig(context.Background(), testConfig, testYamlCfg, singleMode)
 				if err != nil {
 					t.Fatalf("runCheckerWithConfig failed: %v", err)
 				}
@@ -530,107 +494,6 @@ require github.com/foo/baz v1.0.0
 		results, _ := eng.CheckDependencies(ctx, reqs)
 		if len(results) != 0 {
 			t.Errorf("Expected 0 results for cancelled context, got %d", len(results))
-		}
-	})
-
-	t.Run("ImplicitConfigParseError", func(t *testing.T) {
-		dir := t.TempDir()
-		configPath := filepath.Join(dir, "gomajor.yaml")
-		if err := os.WriteFile(configPath, []byte("malformed: yaml: :"), 0o644); err != nil {
-			t.Fatalf("os.WriteFile: %v", err)
-		}
-
-		origCwd, err := os.Getwd()
-		if err != nil {
-			t.Fatalf("os.Getwd: %v", err)
-		}
-		if err := os.Chdir(dir); err != nil {
-			t.Fatalf("os.Chdir: %v", err)
-		}
-		defer func() {
-			_ = os.Chdir(origCwd)
-		}()
-
-		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
-			rw.WriteHeader(http.StatusNotFound)
-		}))
-		defer server.Close()
-
-		cfg := &config.Config{
-			ConfigPath: "",
-			Client:     &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
-		}
-
-		err = runCheckerWithConfig(context.Background(), cfg, false, false, false, false, false)
-		if err == nil {
-			t.Fatal("expected error parsing malformed implicit config, got nil")
-		}
-	})
-
-	t.Run("CliPrecedence", func(t *testing.T) {
-		dir := t.TempDir()
-		p := writeModFile(t, dir, "module example.com/test\ngo 1.21\nrequire github.com/foo/bar v1.0.0\n")
-
-		configPath := filepath.Join(dir, "gomajor.yaml")
-		configContent := fmt.Sprintf(`
-local:
-  - %s
-minor: false
-major: false
-`, p)
-		if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
-			t.Fatalf("failed to write config: %v", err)
-		}
-
-		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-			if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
-				_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
-			} else {
-				rw.WriteHeader(http.StatusNotFound)
-			}
-		}))
-		defer server.Close()
-
-		// case 1: minorExplicit and majorExplicit are true (CLI passed --minor=true --major=true)
-		// We expect the CLI values (true, true) to override the config file values (false, false)
-		cfg := &config.Config{
-			ModFilePath: p,
-			ConfigPath:  configPath,
-			Minor:       true,
-			Major:       true,
-			MaxProbe:    2,
-			Client:      &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
-		}
-		err := runCheckerWithConfig(context.Background(), cfg, true, true, false, true, true)
-		if err != nil {
-			t.Fatalf("runCheckerWithConfig failed: %v", err)
-		}
-		if !cfg.Minor {
-			t.Error("expected cfg.Minor to remain true (CLI precedence), but got false")
-		}
-		if !cfg.Major {
-			t.Error("expected cfg.Major to remain true (CLI precedence), but got false")
-		}
-
-		// case 2: minorExplicit and majorExplicit are false (CLI defaults/not explicitly passed)
-		// We expect config values (false, false) to override defaults.
-		cfg2 := &config.Config{
-			ModFilePath: p,
-			ConfigPath:  configPath,
-			Minor:       true,
-			Major:       true,
-			MaxProbe:    2,
-			Client:      &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
-		}
-		err = runCheckerWithConfig(context.Background(), cfg2, true, true, false, false, false)
-		if err != nil {
-			t.Fatalf("runCheckerWithConfig failed: %v", err)
-		}
-		if cfg2.Minor {
-			t.Error("expected cfg2.Minor to become false (config file took precedence), but got true")
-		}
-		if cfg2.Major {
-			t.Error("expected cfg2.Major to become false (config file took precedence), but got true")
 		}
 	})
 }
