@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -325,7 +326,8 @@ func (c *Client) fetchFromProxy(ctx context.Context, proxyURL, escaped string) (
 			var info struct {
 				Version string `json:"Version"`
 			}
-			if err := json.NewDecoder(resp.Body).Decode(&info); err != nil || info.Version == "" {
+			limitReader := io.LimitReader(resp.Body, 10*constants.MB)
+			if err := json.NewDecoder(limitReader).Decode(&info); err != nil || info.Version == "" {
 				return "", backoff.Permanent(fmt.Errorf("invalid json: %w", err))
 			}
 			return info.Version, nil
@@ -335,7 +337,6 @@ func (c *Client) fetchFromProxy(ctx context.Context, proxyURL, escaped string) (
 		if !retryable {
 			return "", backoff.Permanent(fmt.Errorf("status %d", resp.StatusCode))
 		}
-
 		return "", fmt.Errorf("status %d", resp.StatusCode)
 	}
 

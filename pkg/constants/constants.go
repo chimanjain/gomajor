@@ -29,4 +29,6 @@ const (
 
 	// DefaultMaxProbe is the default maximum number of major versions to probe.
 	DefaultMaxProbe = 5
+
+	MB = 1024 * 1024
 )
