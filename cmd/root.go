@@ -25,11 +25,10 @@ func NewRootCmd() *cobra.Command {
 		Long: `A tool that parses a go.mod file and checks the Go proxy 
 to discover if there are newer major versions (e.g. v2 -> v3) 
 available for your dependencies.`,
-		Run: func(cmd *cobra.Command, _ []string) {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := parseConfig(cmd)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, "Error parsing configuration:", err)
-				os.Exit(1)
+				return fmt.Errorf("error parsing configuration: %w", err)
 			}
 			cfg.Client.DisableMinor = !cfg.Minor
 			cfg.Client.DisableMajor = !cfg.Major
@@ -39,7 +38,7 @@ available for your dependencies.`,
 			})
 			cfg.Logger = slog.New(handler)
 
-			runChecker(cmd.Context(), cfg, cmd.Flags().Changed("file"), cmd.Flags().Changed("config"), cmd.Flags().Changed("output"))
+			return runCheckerWithConfig(cmd.Context(), cfg, cmd.Flags().Changed("file"), cmd.Flags().Changed("config"), cmd.Flags().Changed("output"))
 		},
 	}
 

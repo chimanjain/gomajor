@@ -49,15 +49,51 @@ func parseModContent(sourceName string, sourceType string, content []byte) (Pars
 	}, nil
 }
 
-// SanitizeURL strips credentials (usernames, passwords, or tokens) from a raw URL.
+// SanitizeURL strips credentials (usernames, passwords, or tokens) and
+// sensitive query parameters from a raw URL.
 func SanitizeURL(raw string) string {
-	if !strings.Contains(raw, "@") {
+	if !strings.Contains(raw, "://") {
 		return raw
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.User == nil {
+	if err != nil {
 		return raw
 	}
-	u.User = url.User("redacted")
+
+	modified := false
+
+	if u.User != nil {
+		u.User = url.User("redacted")
+		modified = true
+	}
+
+	if u.RawQuery != "" {
+		q := u.Query()
+		for key := range q {
+			if isSensitiveParam(key) {
+				q.Set(key, "REDACTED")
+				modified = true
+			}
+		}
+		if modified {
+			u.RawQuery = q.Encode()
+		}
+	}
+
+	if !modified {
+		return raw
+	}
 	return u.String()
+}
+
+// isSensitiveParam returns true if the query parameter name looks like it
+// could contain a secret value.
+func isSensitiveParam(key string) bool {
+	lower := strings.ToLower(key)
+	switch lower {
+	case "token", "access_token", "secret", "password", "auth",
+		"key", "api_key", "apikey", "pat", "private_token":
+		return true
+	}
+	return false
 }

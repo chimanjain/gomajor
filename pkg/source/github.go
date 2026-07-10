@@ -7,9 +7,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
-	"time"
+
+	"github.com/cenkalti/backoff/v7"
+	"github.com/chimanjain/gomajor/pkg/constants"
 )
 
 // getGithubRawURLs normalizes a GitHub path or URL into candidate raw URL(s).
@@ -102,28 +103,19 @@ func resolveGithubToken(pathOrURL string) string {
 	return token
 }
 
-func getRateLimitDelay(resp *http.Response) (time.Duration, bool) {
-	if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
-		if s, err := strconv.Atoi(retryAfter); err == nil && s > 0 {
-			return time.Duration(s) * time.Second, true
-		}
-	} else if reset := resp.Header.Get("X-RateLimit-Reset"); reset != "" {
-		if s, err := strconv.ParseInt(reset, 10, 64); err == nil {
-			if d := time.Until(time.Unix(s, 0)); d > 0 {
-				return d, true
-			}
-		}
-	}
-	return 0, false
-}
-
 func fetchSingleURL(ctx context.Context, client *http.Client, u, token string) ([]byte, error) {
-	delay := 100 * time.Millisecond
+	b := backoff.NewExponentialBackOff()
+	b.InitialInterval = constants.HTTPRetryInitialDelay
 
-	for attempt := range 3 {
+	maxTries := uint(constants.HTTPMaxRetries)
+	if maxTries == 0 {
+		maxTries = 1
+	}
+
+	operation := func() ([]byte, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		if err != nil {
-			return nil, err
+			return nil, backoff.Permanent(err)
 		}
 
 		if token != "" {
@@ -135,38 +127,23 @@ func fetchSingleURL(ctx context.Context, client *http.Client, u, token string) (
 		}
 
 		resp, err := client.Do(req)
-		if err == nil {
-			if resp.StatusCode == http.StatusOK {
-				defer resp.Body.Close()
-				limitReader := io.LimitReader(resp.Body, 10*1024*1024)
-				return io.ReadAll(limitReader)
-			}
-
-			if resp.StatusCode == http.StatusTooManyRequests {
-				if d, ok := getRateLimitDelay(resp); ok {
-					delay = d
-				}
-			}
-
-			retryable := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
-			_ = resp.Body.Close()
-
-			if !retryable {
-				return nil, fmt.Errorf("HTTP status %d: %s", resp.StatusCode, resp.Status)
-			}
-			err = fmt.Errorf("HTTP status %d: %s", resp.StatusCode, resp.Status)
-		}
-
-		if attempt < 2 {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(delay):
-				delay *= 2
-			}
-		} else if err != nil {
+		if err != nil {
 			return nil, err
 		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK {
+			limitReader := io.LimitReader(resp.Body, 10*1024*1024)
+			return io.ReadAll(limitReader)
+		}
+
+		retryable := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
+		if !retryable {
+			return nil, backoff.Permanent(fmt.Errorf("HTTP status %d: %s", resp.StatusCode, resp.Status))
+		}
+
+		return nil, fmt.Errorf("HTTP status %d: %s", resp.StatusCode, resp.Status)
 	}
-	return nil, fmt.Errorf("max retries exceeded")
+
+	return backoff.Retry(ctx, operation, backoff.WithBackOff(b), backoff.WithMaxTries(maxTries))
 }

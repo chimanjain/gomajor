@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/chimanjain/gomajor/checker"
 	"github.com/chimanjain/gomajor/pkg/config"
@@ -113,12 +114,18 @@ func (e *Engine) CheckDependencies(ctx context.Context, reqs []*modfile.Require)
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(constants.EngineConcurrencyLimit)
 
+	var completed atomic.Int32
+
 	for i, req := range reqs {
 		g.Go(func() error {
 			if gCtx.Err() != nil {
 				return gCtx.Err()
 			}
 			orderedResults[i] = e.Config.Client.Check(gCtx, req.Mod.Path, req.Mod.Version, e.Config.MaxProbe)
+			if e.Config.OnProgress != nil {
+				c := completed.Add(1)
+				e.Config.OnProgress(int(c), len(reqs))
+			}
 			return nil
 		})
 	}

@@ -19,12 +19,13 @@ func TestClient(t *testing.T) {
 			name      string
 			goproxy   string
 			wantProxy string
+			wantURLs  []string
 		}{
-			{"Default", "", "https://proxy.golang.org"},
-			{"Custom", "https://myproxy.com", "https://myproxy.com"},
-			{"List", "https://proxy1.com,https://proxy2.com,direct", "https://proxy1.com"},
-			{"Direct", "direct", "https://proxy.golang.org"},
-			{"Off", "off", "https://proxy.golang.org"},
+			{"Default", "", "https://proxy.golang.org", []string{"https://proxy.golang.org"}},
+			{"Custom", "https://myproxy.com", "https://myproxy.com", []string{"https://myproxy.com"}},
+			{"List", "https://proxy1.com,https://proxy2.com,direct", "https://proxy1.com", []string{"https://proxy1.com", "https://proxy2.com"}},
+			{"Direct", "direct", "https://proxy.golang.org", []string{"https://proxy.golang.org"}},
+			{"Off", "off", "https://proxy.golang.org", []string{"https://proxy.golang.org"}},
 		}
 
 		for _, tt := range tests {
@@ -37,6 +38,14 @@ func TestClient(t *testing.T) {
 				c := DefaultClient()
 				if c.ProxyBase != tt.wantProxy {
 					t.Errorf("DefaultClient() ProxyBase = %s, want %s", c.ProxyBase, tt.wantProxy)
+				}
+				if len(c.ProxyURLs) != len(tt.wantURLs) {
+					t.Fatalf("DefaultClient() ProxyURLs length = %d, want %d", len(c.ProxyURLs), len(tt.wantURLs))
+				}
+				for i, u := range c.ProxyURLs {
+					if u != tt.wantURLs[i] {
+						t.Errorf("DefaultClient() ProxyURLs[%d] = %s, want %s", i, u, tt.wantURLs[i])
+					}
 				}
 			})
 		}
@@ -108,6 +117,16 @@ func TestClient(t *testing.T) {
 				wantMajorPath:   "github.com/foo/bar",
 				wantMinorUpdate: true,
 				wantMinorVer:    "v1.5.0",
+			},
+			{
+				name:            "IncompatibleMajorUpdate",
+				modPath:         "github.com/foo/bar",
+				version:         "v2.0.0+incompatible",
+				wantUpdate:      true,
+				wantMajor:       3,
+				wantMajorPath:   "github.com/foo/bar/v3",
+				wantMajorVer:    "v3.1.0",
+				wantMinorUpdate: false,
 			},
 		}
 
@@ -184,16 +203,16 @@ func TestClient(t *testing.T) {
 			t.Errorf("Expected version v3.1.0, got %s", ver)
 		}
 
-		// Test gap-tolerant probing
+		// Test that gaps in major versions are not probed further to optimize request counts (Option A)
 		majorGap, pathGap, verGap := client.FindLatestMajor(context.Background(), "github.com/gap/mod", 1, 5, "/")
-		if majorGap != 3 {
-			t.Errorf("Expected major 3 for gap repository, got %d", majorGap)
+		if majorGap != 1 {
+			t.Errorf("Expected major 1 (stopped due to missing v2), got %d", majorGap)
 		}
-		if pathGap != "github.com/gap/mod/v3" {
-			t.Errorf("Expected path github.com/gap/mod/v3, got %s", pathGap)
+		if pathGap != "github.com/gap/mod" {
+			t.Errorf("Expected path github.com/gap/mod, got %s", pathGap)
 		}
-		if verGap != "v3.0.0" {
-			t.Errorf("Expected version v3.0.0, got %s", verGap)
+		if verGap != "" {
+			t.Errorf("Expected empty version, got %s", verGap)
 		}
 	})
 
@@ -262,7 +281,7 @@ func TestClient(t *testing.T) {
 				t.Errorf("Expected version v4.0.0, got %s", ver)
 			}
 
-			// We check that v2, v3, v4, v5, v6 were queried.
+			// We check that v2, v3, v4, v5 were queried, but v6 was NOT.
 			mu.Lock()
 			queryMap := make(map[string]bool)
 			for _, h := range hits {
@@ -275,12 +294,14 @@ func TestClient(t *testing.T) {
 				"/github.com/foo/bar/v3/@latest",
 				"/github.com/foo/bar/v4/@latest",
 				"/github.com/foo/bar/v5/@latest",
-				"/github.com/foo/bar/v6/@latest",
 			}
 			for _, q := range expectedQueries {
 				if !queryMap[q] {
 					t.Errorf("Expected query to %s, but it was not made", q)
 				}
+			}
+			if queryMap["/github.com/foo/bar/v6/@latest"] {
+				t.Errorf("Unexpected query to v6 was made after v5 returned 404")
 			}
 		})
 	})
@@ -476,15 +497,9 @@ func TestClient(t *testing.T) {
 			{"NoMatch", "github.com/myorg/private-*,git.internal.corp", "github.com/myorg/public-repo", false},
 		}
 
-		origPrivateGlobs := privateGlobs
-		t.Cleanup(func() {
-			privateGlobs = origPrivateGlobs
-		})
-
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				t.Setenv("GOPRIVATE", tt.goprivate)
-				privateGlobs = tt.goprivate
 				_, ok := client.latestVersion(context.Background(), tt.modPath)
 				if ok != tt.wantOk {
 					t.Errorf("latestVersion(%s) ok = %t, want %t", tt.modPath, ok, tt.wantOk)
@@ -590,4 +605,64 @@ func TestClient_Concurrency(t *testing.T) {
 	if maxInFlight > 3 {
 		t.Errorf("expected max in-flight requests to be <= 3, got %d", maxInFlight)
 	}
+}
+
+func TestPackageCheck(t *testing.T) {
+	ctx := context.Background()
+	info := Check(ctx, "github.com/foo/bar", "v1.0.0", 0)
+	if info.Current != "github.com/foo/bar" {
+		t.Errorf("expected current path github.com/foo/bar, got %s", info.Current)
+	}
+}
+
+func TestNewClient(t *testing.T) {
+	t.Run("Defaults", func(t *testing.T) {
+		c := NewClient()
+		if c.HTTPClient == nil {
+			t.Error("HTTPClient should not be nil")
+		}
+		if c.ProxyBase != "https://proxy.golang.org" {
+			t.Errorf("ProxyBase = %q, want default proxy", c.ProxyBase)
+		}
+		if len(c.ProxyURLs) != 1 || c.ProxyURLs[0] != "https://proxy.golang.org" {
+			t.Errorf("ProxyURLs = %v, want [https://proxy.golang.org]", c.ProxyURLs)
+		}
+	})
+
+	t.Run("WithOptions", func(t *testing.T) {
+		customClient := &http.Client{Timeout: 5 * time.Second}
+		urls := []string{"https://proxy1.com", "https://proxy2.com"}
+
+		c := NewClient(
+			WithHTTPClient(customClient),
+			WithProxyURLs(urls),
+			WithDisableMinor(true),
+			WithDisableMajor(true),
+			WithConcurrencyLimit(5),
+		)
+
+		if c.HTTPClient != customClient {
+			t.Error("HTTPClient not set by WithHTTPClient")
+		}
+		if c.ProxyBase != "https://proxy1.com" {
+			t.Errorf("ProxyBase = %q, want https://proxy1.com", c.ProxyBase)
+		}
+		if len(c.ProxyURLs) != 2 {
+			t.Errorf("ProxyURLs length = %d, want 2", len(c.ProxyURLs))
+		}
+		if !c.DisableMinor {
+			t.Error("DisableMinor should be true")
+		}
+		if !c.DisableMajor {
+			t.Error("DisableMajor should be true")
+		}
+	})
+
+	t.Run("WithConcurrencyLimit_Zero", func(t *testing.T) {
+		c := NewClient(WithConcurrencyLimit(0))
+		// Should keep the default semaphore, not create a zero-capacity one.
+		if cap(c.sem) == 0 {
+			t.Error("sem capacity should not be 0")
+		}
+	})
 }

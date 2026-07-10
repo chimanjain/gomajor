@@ -38,11 +38,6 @@ func NextMajorPath(basePath string, major int, sep string) string {
 	return basePath + sep + "v" + strconv.Itoa(major)
 }
 
-// EscapePath applies Go module path escaping (uppercase letters become !lowercase).
-func EscapePath(modPath string) (string, error) {
-	return module.EscapePath(modPath)
-}
-
 // NormalizeSplitString splits a string by comma, space, tab, or newline, and trims whitespace.
 func NormalizeSplitString(p string) []string {
 	return strings.FieldsFunc(p, func(r rune) bool {
