@@ -82,7 +82,13 @@ func FetchGithubMod(ctx context.Context, client *http.Client, pathOrURL string) 
 		}
 		lastErr = err
 	}
-	return nil, "", fmt.Errorf("failed to fetch go.mod from candidates %v: %w", urls, lastErr)
+
+	sanitizedUrls := make([]string, len(urls))
+	for i, u := range urls {
+		sanitizedUrls[i] = SanitizeURL(u)
+	}
+
+	return nil, "", fmt.Errorf("failed to fetch go.mod from candidates %v: %w", sanitizedUrls, lastErr)
 }
 
 func resolveGithubToken(pathOrURL string) string {
@@ -133,7 +139,7 @@ func fetchSingleURL(ctx context.Context, client *http.Client, u, token string) (
 		defer resp.Body.Close()
 
 		if resp.StatusCode == http.StatusOK {
-			limitReader := io.LimitReader(resp.Body, 10*1024*1024)
+			limitReader := io.LimitReader(resp.Body, 5*constants.MB)
 			return io.ReadAll(limitReader)
 		}
 

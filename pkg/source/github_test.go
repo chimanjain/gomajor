@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/chimanjain/gomajor/pkg/constants"
 )
 
 const githubOwnerRepoURL = "https://github.com/owner/repo"
@@ -113,7 +115,7 @@ func TestFetchGithubMod(t *testing.T) {
 				}))
 				return server.URL, nil, server.Client(), server.Close
 			},
-			wantLen: 10 * 1024 * 1024,
+			wantLen: 5 * constants.MB,
 		},
 		{
 			name: "Auth_TokenFromEnv",

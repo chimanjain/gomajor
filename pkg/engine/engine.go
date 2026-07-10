@@ -109,21 +109,47 @@ func (e *Engine) CheckDependencies(ctx context.Context, reqs []*modfile.Require)
 		return nil, nil
 	}
 
+	type uniqueCheck struct {
+		modPath string
+		version string
+		indices []int
+	}
+
+	uniqueMap := make(map[string]*uniqueCheck)
+	var uniques []*uniqueCheck
+
+	for i, req := range reqs {
+		uc, exists := uniqueMap[req.Mod.Path]
+		if !exists {
+			uc = &uniqueCheck{
+				modPath: req.Mod.Path,
+				version: req.Mod.Version,
+				indices: []int{i},
+			}
+			uniqueMap[req.Mod.Path] = uc
+			uniques = append(uniques, uc)
+		} else {
+			uc.indices = append(uc.indices, i)
+		}
+	}
+
 	orderedResults := make([]checker.ModuleInfo, len(reqs))
+	uniqueResults := make([]checker.ModuleInfo, len(uniques))
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(constants.EngineConcurrencyLimit)
 
 	var completed atomic.Int32
 
-	for i, req := range reqs {
+	for i, uc := range uniques {
 		g.Go(func() error {
 			if gCtx.Err() != nil {
 				return gCtx.Err()
 			}
-			orderedResults[i] = e.Config.Client.Check(gCtx, req.Mod.Path, req.Mod.Version, e.Config.MaxProbe)
+			uniqueResults[i] = e.Config.Client.Check(gCtx, uc.modPath, uc.version, e.Config.MaxProbe)
 			if e.Config.OnProgress != nil {
-				c := completed.Add(1)
+				// #nosec G115
+				c := completed.Add(int32(len(uc.indices)))
 				e.Config.OnProgress(int(c), len(reqs))
 			}
 			return nil
@@ -132,6 +158,21 @@ func (e *Engine) CheckDependencies(ctx context.Context, reqs []*modfile.Require)
 
 	if err := g.Wait(); err != nil {
 		return nil, err
+	}
+
+	for i, uc := range uniques {
+		baseRes := uniqueResults[i]
+		orderedResults[uc.indices[0]] = baseRes
+
+		for _, idx := range uc.indices[1:] {
+			req := reqs[idx]
+			if req.Mod.Version == uc.version {
+				orderedResults[idx] = baseRes
+				orderedResults[idx].CurrentVersion = req.Mod.Version
+			} else {
+				orderedResults[idx] = e.Config.Client.Check(ctx, req.Mod.Path, req.Mod.Version, e.Config.MaxProbe)
+			}
+		}
 	}
 
 	return orderedResults, nil
