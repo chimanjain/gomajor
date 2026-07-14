@@ -408,24 +408,37 @@ func (c *Client) Check(ctx context.Context, modPath, modVersion string, maxProbe
 		Separator:      sep,
 	}
 
+	var wg sync.WaitGroup
+
 	if !c.DisableMajor {
-		latestMajor, latestPath, latestVer := c.FindLatestMajor(ctx, basePath, currentMajor, maxProbe, sep)
-		info.LatestMajor = latestMajor
-		info.LatestMajorPath = latestPath
-		info.LatestMajorVersion = latestVer
-		info.HasUpdate = latestMajor > currentMajor
+		wg.Go(func() {
+			latestMajor, latestPath, latestVer := c.FindLatestMajor(ctx, basePath, currentMajor, maxProbe, sep)
+			info.LatestMajor = latestMajor
+			info.LatestMajorPath = latestPath
+			info.LatestMajorVersion = latestVer
+			info.HasUpdate = latestMajor > currentMajor
+		})
 	} else {
 		info.LatestMajor = currentMajor
 		info.LatestMajorPath = modPath
 	}
 
+	var latestMinor string
+	var hasMinorUpdate bool
 	if !c.DisableMinor {
-		latestMinor, ok := c.latestVersion(ctx, modPath)
-		if ok && latestMinor != "" && semver.Compare(latestMinor, modVersion) > 0 {
-			info.LatestMinorVersion = latestMinor
-			info.HasMinorUpdate = true
-		}
+		wg.Go(func() {
+			lm, ok := c.latestVersion(ctx, modPath)
+			if ok && lm != "" && semver.Compare(lm, modVersion) > 0 {
+				latestMinor = lm
+				hasMinorUpdate = true
+			}
+		})
 	}
+
+	wg.Wait()
+
+	info.LatestMinorVersion = latestMinor
+	info.HasMinorUpdate = hasMinorUpdate
 
 	return info
 }

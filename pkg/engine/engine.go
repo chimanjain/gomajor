@@ -115,18 +115,19 @@ func (e *Engine) CheckDependencies(ctx context.Context, reqs []*modfile.Require)
 		indices []int
 	}
 
-	uniqueMap := make(map[string]*uniqueCheck)
+	uniqueMap := make(map[depKey]*uniqueCheck)
 	var uniques []*uniqueCheck
 
 	for i, req := range reqs {
-		uc, exists := uniqueMap[req.Mod.Path]
+		k := depKey{modPath: req.Mod.Path, version: req.Mod.Version}
+		uc, exists := uniqueMap[k]
 		if !exists {
 			uc = &uniqueCheck{
 				modPath: req.Mod.Path,
 				version: req.Mod.Version,
 				indices: []int{i},
 			}
-			uniqueMap[req.Mod.Path] = uc
+			uniqueMap[k] = uc
 			uniques = append(uniques, uc)
 		} else {
 			uc.indices = append(uc.indices, i)
@@ -162,16 +163,8 @@ func (e *Engine) CheckDependencies(ctx context.Context, reqs []*modfile.Require)
 
 	for i, uc := range uniques {
 		baseRes := uniqueResults[i]
-		orderedResults[uc.indices[0]] = baseRes
-
-		for _, idx := range uc.indices[1:] {
-			req := reqs[idx]
-			if req.Mod.Version == uc.version {
-				orderedResults[idx] = baseRes
-				orderedResults[idx].CurrentVersion = req.Mod.Version
-			} else {
-				orderedResults[idx] = e.Config.Client.Check(ctx, req.Mod.Path, req.Mod.Version, e.Config.MaxProbe)
-			}
+		for _, idx := range uc.indices {
+			orderedResults[idx] = baseRes
 		}
 	}
 
