@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [1.8.0] - 2026-07-14
+
+### Added
+
+- **Verbose Logging Output**: Added a native `--verbose` CLI flag to output detailed logging on stdout and stderr.
+- **Dependency Check Deduplication**: Implemented automated request deduplication to prevent redundant remote queries for duplicate package paths in multi-source scans.
+- **Concurrent Version Checks**: Optimized checking engine to perform checks for multiple dependency versions concurrently with customized concurrency thresholds.
+
+### Changed
+
+- **CLI-to-Config Override Precedence**: Refactored config resolution logic so that command-line options explicitly override settings loaded from active configuration profiles.
+- **Checker Client Functional Options**: Modernized the `checker.Client` configuration surface using Go functional configuration options.
+- **Enhanced URL Sanitization**: Upgraded sanitization behaviors to selectively parse and redact passwords, credentials, and sensitive parameters from query strings.
+
+---
+
 ## [1.7.0] - 2026-07-05
 
 ### Added
