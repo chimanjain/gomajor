@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/chimanjain/gomajor/checker"
+	"github.com/chimanjain/gomajor/pkg/checker"
 	"github.com/chimanjain/gomajor/pkg/constants"
 )
 

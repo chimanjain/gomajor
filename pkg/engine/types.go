@@ -1,7 +1,7 @@
 package engine
 
 import (
-	"github.com/chimanjain/gomajor/checker"
+	"github.com/chimanjain/gomajor/pkg/checker"
 )
 
 // DependencyInfo holds information about a specific checked dependency.

@@ -101,7 +101,11 @@ func writeOutput(cfg *config.Config, results []engine.SourceResult, singleMode b
 		return format.PrintMultiJSONResults(cfg.Out, results)
 	}
 
-	format.PrintTextResults(cfg.Out, results, singleMode)
+	disableMinor := false
+	if cfg.Client != nil {
+		disableMinor = cfg.Client.DisableMinor
+	}
+	format.PrintTextResults(cfg.Out, results, singleMode, disableMinor)
 	return nil
 }
 
