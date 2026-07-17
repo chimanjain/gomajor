@@ -93,7 +93,9 @@ func parseConfig(cmd *cobra.Command) (*config.Config, config.YAMLConfig, error) 
 			vFile := viper.New()
 			vFile.SetConfigFile(configPath)
 			if err := vFile.ReadInConfig(); err == nil {
-				_ = vFile.Unmarshal(&fileYamlCfg)
+				if err := vFile.Unmarshal(&fileYamlCfg); err != nil {
+					return nil, config.YAMLConfig{}, fmt.Errorf("parsing config file %s: %w", configPath, err)
+				}
 			}
 		}
 	}

@@ -138,7 +138,7 @@ func printTable(w io.Writer, indent string, rows [][]string) {
 	}
 }
 
-func printDependencies(w io.Writer, indent string, deps []engine.DependencyInfo) bool {
+func printDependencies(w io.Writer, indent string, deps []engine.DependencyInfo, disableMinor bool) bool {
 	var rows [][]string
 	for _, dep := range deps {
 		if dep.HasUpdate || dep.HasMinorUpdate {
@@ -148,14 +148,18 @@ func printDependencies(w io.Writer, indent string, deps []engine.DependencyInfo)
 	}
 
 	if len(rows) == 0 {
-		_, _ = fmt.Fprintln(w, color.GreenString(indent+"✔ All checked dependencies are on their latest major versions."))
+		msg := "✔ All checked dependencies are up to date."
+		if disableMinor {
+			msg = "✔ All checked dependencies are on their latest major versions."
+		}
+		_, _ = fmt.Fprintln(w, color.GreenString(indent+msg))
 		return false
 	}
 	printTable(w, indent, rows)
 	return true
 }
 
-func PrintTextResults(w io.Writer, results []engine.SourceResult, singleMode bool) {
+func PrintTextResults(w io.Writer, results []engine.SourceResult, singleMode bool, disableMinor bool) {
 	if singleMode {
 		if len(results) == 0 {
 			return
@@ -166,7 +170,7 @@ func PrintTextResults(w io.Writer, results []engine.SourceResult, singleMode boo
 			return
 		}
 
-		if printDependencies(w, "", res.Dependencies) {
+		if printDependencies(w, "", res.Dependencies, disableMinor) {
 			_, _ = fmt.Fprintln(w)
 		}
 	} else {
@@ -180,7 +184,7 @@ func PrintTextResults(w io.Writer, results []engine.SourceResult, singleMode boo
 				continue
 			}
 
-			printDependencies(w, "  ", res.Dependencies)
+			printDependencies(w, "  ", res.Dependencies, disableMinor)
 		}
 	}
 }

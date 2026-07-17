@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/chimanjain/gomajor/checker"
+	"github.com/chimanjain/gomajor/pkg/checker"
 	"github.com/chimanjain/gomajor/pkg/config"
 	"github.com/chimanjain/gomajor/pkg/engine"
 	"github.com/chimanjain/gomajor/pkg/format"
