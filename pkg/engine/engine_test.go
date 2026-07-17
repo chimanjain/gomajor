@@ -160,7 +160,7 @@ func TestRunLocalSource(t *testing.T) {
 	}
 
 	res := results[0]
-	if res.Source != modPath || res.SourceType != source.SourceTypeLocal {
+	if res.Source != modPath || res.SourceType != source.Local {
 		t.Errorf("Unexpected source info: %s (%s)", res.Source, res.SourceType)
 	}
 

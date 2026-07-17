@@ -12,7 +12,7 @@ import (
 func WriteModFile(t *testing.T, dir, content string) string {
 	t.Helper()
 	p := filepath.Join(dir, "go.mod")
-	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
 		t.Fatalf("testutil.WriteModFile: %v", err)
 	}
 	return p

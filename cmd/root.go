@@ -115,23 +115,26 @@ func parseConfig(cmd *cobra.Command) (*config.Config, config.YAMLConfig, error) 
 	cfg.ConfigPath = configPath
 
 	// Strict config merging: CLI flag (explicitly set) > YAML file > Defaults
-	if cmd.Flags().Changed("minor") {
+	switch {
+	case cmd.Flags().Changed("minor"):
 		cfg.Minor = v.GetBool("minor")
-	} else if fileYamlCfg.Minor != nil {
+	case fileYamlCfg.Minor != nil:
 		cfg.Minor = *fileYamlCfg.Minor
-	} else {
+	default:
 		cfg.Minor = v.GetBool("minor")
 	}
 
-	if cmd.Flags().Changed("major") {
+	switch {
+	case cmd.Flags().Changed("major"):
 		cfg.Major = v.GetBool("major")
-	} else if fileYamlCfg.Major != nil {
+	case fileYamlCfg.Major != nil:
 		cfg.Major = *fileYamlCfg.Major
-	} else {
+	default:
 		cfg.Major = v.GetBool("major")
 	}
 
-	if cmd.Flags().Changed("output") {
+	switch {
+	case cmd.Flags().Changed("output"):
 		cfg.OutputPath = v.GetString("output")
 		if cfg.OutputPath == "" {
 			if cfg.JSONOutput {
@@ -140,9 +143,9 @@ func parseConfig(cmd *cobra.Command) (*config.Config, config.YAMLConfig, error) 
 				cfg.OutputPath = "gomajor-report.yaml"
 			}
 		}
-	} else if fileYamlCfg.Output != "" {
+	case fileYamlCfg.Output != "":
 		cfg.OutputPath = fileYamlCfg.Output
-	} else {
+	default:
 		cfg.OutputPath = ""
 	}
 

@@ -239,8 +239,8 @@ require github.com/foo/bar v1.0.0
 			for _, res := range output.Results {
 				if filepath.Base(res.Source) == "local.mod" {
 					localFound = true
-					if res.SourceType != source.SourceTypeLocal {
-						t.Errorf("source %s type = %q, want %q", res.Source, res.SourceType, source.SourceTypeLocal)
+					if res.SourceType != source.Local {
+						t.Errorf("source %s type = %q, want %q", res.Source, res.SourceType, source.Local)
 					}
 					if len(res.Dependencies) != 1 {
 						t.Fatalf("expected 1 dependency for local, got %d", len(res.Dependencies))
@@ -285,8 +285,8 @@ require github.com/foo/bar v1.0.0
 				wantResultsLen: 1,
 				verify: func(t *testing.T, output format.YAMLOutput, _ string) {
 					res := output.Results[0]
-					if res.SourceType != source.SourceTypeGitHub {
-						t.Errorf("source type = %q, want %q", res.SourceType, source.SourceTypeGitHub)
+					if res.SourceType != source.GitHub {
+						t.Errorf("source type = %q, want %q", res.SourceType, source.GitHub)
 					}
 					if len(res.Dependencies) != 1 {
 						t.Fatalf("expected 1 dependency, got %d", len(res.Dependencies))
@@ -341,9 +341,9 @@ require github.com/foo/bar v1.0.0
 					githubCount := 0
 					for _, res := range output.Results {
 						switch res.SourceType {
-						case source.SourceTypeLocal:
+						case source.Local:
 							localCount++
-						case source.SourceTypeGitHub:
+						case source.GitHub:
 							githubCount++
 						}
 					}
@@ -375,8 +375,8 @@ require github.com/foo/bar v1.0.0
 						t.Fatalf("expected 1 result, got %d", len(output.Results))
 					}
 					res := output.Results[0]
-					if res.SourceType != source.SourceTypeGitHub {
-						t.Errorf("source type = %q, want %q", res.SourceType, source.SourceTypeGitHub)
+					if res.SourceType != source.GitHub {
+						t.Errorf("source type = %q, want %q", res.SourceType, source.GitHub)
 					}
 					if len(res.Dependencies) != 1 {
 						t.Fatalf("expected 1 dependency, got %d", len(res.Dependencies))

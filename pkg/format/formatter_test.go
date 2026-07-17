@@ -98,7 +98,7 @@ func TestPrintMultiJsonResults(t *testing.T) {
 	results := []engine.SourceResult{
 		{
 			Source:     "test-source",
-			SourceType: source.SourceTypeLocal,
+			SourceType: source.Local,
 			Dependencies: []engine.DependencyInfo{
 				{
 					Module:             "github.com/foo/bar",
