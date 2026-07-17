@@ -2,6 +2,7 @@ package engine
 
 import (
 	"github.com/chimanjain/gomajor/pkg/checker"
+	"github.com/chimanjain/gomajor/pkg/source"
 )
 
 // DependencyInfo holds information about a specific checked dependency.
@@ -17,9 +18,9 @@ type DependencyInfo struct {
 
 // SourceResult holds checking results grouped by source.
 type SourceResult struct {
-	Source       string           `yaml:"source" json:"source"`
-	SourceType   string           `yaml:"source_type" json:"source_type"`
-	Dependencies []DependencyInfo `yaml:"dependencies" json:"dependencies"`
+	Source       string            `yaml:"source" json:"source"`
+	SourceType   source.SourceType `yaml:"source_type" json:"source_type"`
+	Dependencies []DependencyInfo  `yaml:"dependencies" json:"dependencies"`
 }
 
 func ToDependencyInfos(results []checker.ModuleInfo) []DependencyInfo {

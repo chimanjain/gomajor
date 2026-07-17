@@ -8,18 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chimanjain/gomajor/internal/testutil"
 	"github.com/spf13/cobra"
 )
-
-// writeModFile is a test helper that writes a go.mod file to dir and returns its path.
-func writeModFile(t *testing.T, dir, content string) string {
-	t.Helper()
-	p := filepath.Join(dir, "go.mod")
-	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-		t.Fatalf("writeModFile: %v", err)
-	}
-	return p
-}
 
 func TestResolveModFile(t *testing.T) {
 	tests := []struct {
@@ -44,7 +35,7 @@ func TestResolveModFile(t *testing.T) {
 			dir := t.TempDir()
 
 			if tt.createMod {
-				writeModFile(t, dir, "module example.com/test\n\ngo 1.21\n")
+				testutil.WriteModFile(t, dir, "module example.com/test\n\ngo 1.21\n")
 			}
 
 			orig, err := os.Getwd()
@@ -189,4 +180,87 @@ func TestRootCmd(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConfigMerging(t *testing.T) {
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd: %v", err)
+	}
+	defer os.Chdir(orig) //nolint:errcheck
+
+	t.Run("YAMLConfigOnly", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Chdir(dir); err != nil {
+			t.Fatalf("os.Chdir: %v", err)
+		}
+
+		configContent := `
+minor: false
+major: false
+output: my-custom-report.json
+`
+		if err := os.WriteFile("gomajor.yaml", []byte(configContent), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		cmd := NewRootCmd()
+		if err := cmd.ParseFlags(nil); err != nil {
+			t.Fatalf("ParseFlags: %v", err)
+		}
+
+		cfg, _, err := parseConfig(cmd)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+
+		if cfg.Minor {
+			t.Errorf("expected Minor to be false (from YAML), got true")
+		}
+		if cfg.Major {
+			t.Errorf("expected Major to be false (from YAML), got true")
+		}
+		if cfg.OutputPath != "my-custom-report.json" {
+			t.Errorf("expected OutputPath to be my-custom-report.json (from YAML), got %s", cfg.OutputPath)
+		}
+	})
+
+	t.Run("CLIOverridesYAML", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Chdir(dir); err != nil {
+			t.Fatalf("os.Chdir: %v", err)
+		}
+
+		configContent := `
+minor: false
+major: false
+output: my-custom-report.json
+`
+		if err := os.WriteFile("gomajor.yaml", []byte(configContent), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		cmd := NewRootCmd()
+		// Override minor and output in CLI flags
+		args := []string{"--minor=true", "--output=override.json"}
+		if err := cmd.ParseFlags(args); err != nil {
+			t.Fatalf("ParseFlags: %v", err)
+		}
+
+		cfg, _, err := parseConfig(cmd)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+
+		if !cfg.Minor {
+			t.Errorf("expected Minor to be true (CLI override), got false")
+		}
+		// major is not in args, so it should still be false from YAML
+		if cfg.Major {
+			t.Errorf("expected Major to be false (from YAML), got true")
+		}
+		if cfg.OutputPath != "override.json" {
+			t.Errorf("expected OutputPath to be override.json (CLI override), got %s", cfg.OutputPath)
+		}
+	})
 }

@@ -73,10 +73,19 @@ func FetchGithubMod(ctx context.Context, client *http.Client, pathOrURL string) 
 	}
 
 	token := resolveGithubToken(pathOrURL)
+	// tokenSourceHost is non-empty only when the token was embedded in the URL
+	// user-info field. In that case we restrict the token to requests targeting
+	// the same host, preventing accidental credential leakage to other servers.
+	// Env-var tokens (tokenSourceHost == "") are forwarded to all candidates
+	// because the user deliberately set them as global credentials.
+	tokenSourceHost := resolveTokenHost(pathOrURL)
 
 	var lastErr error
 	for _, u := range urls {
-		content, err := fetchSingleURL(ctx, client, u, token)
+		// Send the token if it was from env (always global) or from a URL whose
+		// host matches the candidate URL's host.
+		sendToken := token != "" && (tokenSourceHost == "" || urlHostMatches(u, tokenSourceHost))
+		content, err := fetchSingleURL(ctx, client, u, sendToken, token)
 		if err == nil {
 			return content, u, nil
 		}
@@ -91,6 +100,8 @@ func FetchGithubMod(ctx context.Context, client *http.Client, pathOrURL string) 
 	return nil, "", fmt.Errorf("failed to fetch go.mod from candidates %v: %w", sanitizedUrls, lastErr)
 }
 
+// resolveGithubToken extracts a token from the URL user-info field, falling
+// back to the GITHUB_TOKEN and GITHUB_PAT environment variables.
 func resolveGithubToken(pathOrURL string) string {
 	var token string
 	if u, err := url.Parse(pathOrURL); err == nil && u.User != nil {
@@ -109,7 +120,26 @@ func resolveGithubToken(pathOrURL string) string {
 	return token
 }
 
-func fetchSingleURL(ctx context.Context, client *http.Client, u, token string) ([]byte, error) {
+// resolveTokenHost returns the hostname that a URL-embedded token was scoped to.
+// If the token came from an environment variable (no user-info in the URL) an
+// empty string is returned, which hostMatches treats as "match any github host".
+func resolveTokenHost(pathOrURL string) string {
+	if u, err := url.Parse(pathOrURL); err == nil && u.User != nil && u.Host != "" {
+		return u.Hostname()
+	}
+	return ""
+}
+
+// urlHostMatches reports whether targetURL's hostname equals wantHost.
+func urlHostMatches(targetURL, wantHost string) bool {
+	u, err := url.Parse(targetURL)
+	if err != nil {
+		return false
+	}
+	return u.Hostname() == wantHost
+}
+
+func fetchSingleURL(ctx context.Context, client *http.Client, u string, sendToken bool, token string) ([]byte, error) {
 	b := backoff.NewExponentialBackOff()
 	b.InitialInterval = constants.HTTPRetryInitialDelay
 
@@ -124,7 +154,7 @@ func fetchSingleURL(ctx context.Context, client *http.Client, u, token string) (
 			return nil, backoff.Permanent(err)
 		}
 
-		if token != "" {
+		if sendToken && token != "" {
 			if strings.Contains(token, " ") {
 				req.Header.Set("Authorization", token)
 			} else {
@@ -139,7 +169,7 @@ func fetchSingleURL(ctx context.Context, client *http.Client, u, token string) (
 		defer resp.Body.Close()
 
 		if resp.StatusCode == http.StatusOK {
-			limitReader := io.LimitReader(resp.Body, 5*constants.MB)
+			limitReader := io.LimitReader(resp.Body, constants.GitHubModMaxBytes)
 			return io.ReadAll(limitReader)
 		}
 
