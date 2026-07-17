@@ -11,10 +11,20 @@ import (
 	"golang.org/x/mod/modfile"
 )
 
+// Type identifies where a go.mod was loaded from.
+type Type string
+
+const (
+	// Local indicates a go.mod loaded from the local filesystem.
+	Local Type = "local"
+	// GitHub indicates a go.mod fetched from a remote GitHub repository.
+	GitHub Type = "github"
+)
+
 // ParsedSource represents a parsed go.mod file.
 type ParsedSource struct {
 	Source     string
-	SourceType string
+	SourceType Type
 	Reqs       []*modfile.Require
 }
 
@@ -24,7 +34,7 @@ func ParseLocalMod(path string) (ParsedSource, error) {
 	if err != nil {
 		return ParsedSource{}, fmt.Errorf("reading file: %w", err)
 	}
-	return parseModContent(path, "local", content)
+	return parseModContent(path, Local, content)
 }
 
 // ParseGithubMod fetches and parses a remote go.mod file from GitHub.
@@ -33,11 +43,11 @@ func ParseGithubMod(ctx context.Context, httpClient *http.Client, pathOrURL stri
 	if err != nil {
 		return ParsedSource{}, err
 	}
-	return parseModContent(resolvedURL, "github", content)
+	return parseModContent(resolvedURL, GitHub, content)
 }
 
 // parseModContent parses the module content and extracts required dependencies.
-func parseModContent(sourceName string, sourceType string, content []byte) (ParsedSource, error) {
+func parseModContent(sourceName string, sourceType Type, content []byte) (ParsedSource, error) {
 	modFile, err := modfile.ParseLax(sourceName, content, nil)
 	if err != nil {
 		return ParsedSource{}, fmt.Errorf("parsing go.mod: %w", err)

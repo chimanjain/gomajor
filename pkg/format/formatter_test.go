@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/chimanjain/gomajor/pkg/engine"
+	"github.com/chimanjain/gomajor/pkg/source"
 	"github.com/fatih/color"
 )
 
@@ -21,7 +22,7 @@ func TestFormatter(t *testing.T) {
 			{"", 0},
 			{color.GreenString("hello"), 5},
 			{color.RedString("world") + "!", 6},
-			{"👋 Go", 4}, // Hand wave unicode emoji + space + Go
+			{"👋 Go", 5}, // Hand wave emoji (East_Asian_Width=W) counts as 2 cols + space + G + o = 5
 		}
 
 		for _, tt := range tests {
@@ -97,7 +98,7 @@ func TestPrintMultiJsonResults(t *testing.T) {
 	results := []engine.SourceResult{
 		{
 			Source:     "test-source",
-			SourceType: "local",
+			SourceType: source.Local,
 			Dependencies: []engine.DependencyInfo{
 				{
 					Module:             "github.com/foo/bar",

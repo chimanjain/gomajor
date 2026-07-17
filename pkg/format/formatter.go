@@ -8,10 +8,11 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/chimanjain/gomajor/internal/modpath"
 	"github.com/chimanjain/gomajor/pkg/engine"
-	"github.com/chimanjain/gomajor/utils"
 	"github.com/fatih/color"
 	"go.yaml.in/yaml/v3"
+	"golang.org/x/text/width"
 )
 
 // YAMLOutput defines the structured schema for the saved YAML output.
@@ -49,6 +50,9 @@ func PrintMultiJSONResults(w io.Writer, results []engine.SourceResult) error {
 	return encoder.Encode(outputData)
 }
 
+// visualLen returns the display width of a string in terminal columns.
+// ANSI escape sequences are skipped (they occupy 0 columns), and East-Asian
+// Wide / Fullwidth characters are counted as 2 columns each.
 func visualLen(s string) int {
 	var count int
 	inEscape := false
@@ -65,22 +69,27 @@ func visualLen(s string) int {
 			i += 2
 			continue
 		}
-		_, size := utf8.DecodeRuneInString(s[i:])
+		r, size := utf8.DecodeRuneInString(s[i:])
 		if size == 0 {
 			break
 		}
-		count++
+		switch width.LookupRune(r).Kind() {
+		case width.EastAsianWide, width.EastAsianFullwidth:
+			count += 2
+		default:
+			count++
+		}
 		i += size
 	}
 	return count
 }
 
-func pad(s string, width int) string {
+func pad(s string, w int) string {
 	vlen := visualLen(s)
-	if vlen >= width {
+	if vlen >= w {
 		return s
 	}
-	return s + strings.Repeat(" ", width-vlen)
+	return s + strings.Repeat(" ", w-vlen)
 }
 
 func formatRow(mod, current, minorVer string, hasMinor bool, majorVer, majorPath string, hasMajor bool) []string {
@@ -142,7 +151,7 @@ func printDependencies(w io.Writer, indent string, deps []engine.DependencyInfo,
 	var rows [][]string
 	for _, dep := range deps {
 		if dep.HasUpdate || dep.HasMinorUpdate {
-			basePath, _, _ := utils.ParseModulePath(dep.Module)
+			basePath, _, _ := modpath.ParseModulePath(dep.Module)
 			rows = append(rows, formatRow(basePath, dep.CurrentVersion, dep.LatestMinorVersion, dep.HasMinorUpdate, dep.LatestMajorVersion, dep.LatestMajorPath, dep.HasUpdate))
 		}
 	}
@@ -178,7 +187,8 @@ func PrintTextResults(w io.Writer, results []engine.SourceResult, singleMode boo
 			if i > 0 {
 				_, _ = fmt.Fprintln(w)
 			}
-			_, _ = fmt.Fprintf(w, "%s (%s)\n", color.HiCyanString(res.Source), color.HiBlackString(res.SourceType))
+			_, _ = fmt.Fprintf(w, "%s (%s)\n", color.HiCyanString(res.Source), color.HiBlackString(string(res.SourceType)))
+
 			if len(res.Dependencies) == 0 {
 				_, _ = fmt.Fprintln(w, "  No matching dependencies found.")
 				continue

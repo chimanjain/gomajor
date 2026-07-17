@@ -30,6 +30,11 @@ type checkTask struct {
 	path    string
 }
 
+// normalizeSources deduplicates and normalises both local paths and GitHub repo
+// strings in yamlCfg. GitHub entries support comma/space/tab separation, so
+// each entry is split before deduplication.
+// This is the single authoritative deduplication point for all source types;
+// callers (e.g. cmd/runner.go) should pass raw values and rely on this function.
 func normalizeSources(yamlCfg *config.YAMLConfig) {
 	seenLocal := make(map[string]bool)
 	var uniqueLocal []string
@@ -75,7 +80,7 @@ func (e *Engine) parseAllSources(ctx context.Context, tasks []checkTask) ([]sour
 					return nil // Skip this source on error
 				}
 			} else {
-				pSource, err = source.ParseGithubMod(gCtx, e.Config.Client.HTTPClient, task.path)
+				pSource, err = source.ParseGithubMod(gCtx, e.Config.GitHubHTTPClient, task.path)
 				if err != nil {
 					e.Config.Logger.Warn("failed to check github go.mod", "path", source.SanitizeURL(task.path), "error", err)
 					return nil

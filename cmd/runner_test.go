@@ -10,10 +10,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/chimanjain/gomajor/internal/testutil"
 	"github.com/chimanjain/gomajor/pkg/checker"
 	"github.com/chimanjain/gomajor/pkg/config"
 	"github.com/chimanjain/gomajor/pkg/engine"
 	"github.com/chimanjain/gomajor/pkg/format"
+	"github.com/chimanjain/gomajor/pkg/source"
 	"go.yaml.in/yaml/v3"
 	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
@@ -25,8 +27,6 @@ const (
 go 1.21
 require github.com/foo/bar v1.0.0
 `
-	localSource        = "local"
-	githubSource       = "github"
 	fooBarModule       = "github.com/foo/bar"
 	githubOwnerRepoURL = "https://github.com/owner/repo"
 )
@@ -115,7 +115,7 @@ require github.com/foo/bar v1.0.0
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				dir := t.TempDir()
-				p := writeModFile(t, dir, tt.goModContent)
+				p := testutil.WriteModFile(t, dir, tt.goModContent)
 
 				var server *httptest.Server
 				if tt.httpHandler != nil {
@@ -132,6 +132,7 @@ require github.com/foo/bar v1.0.0
 					CheckAll:    tt.checkAll,
 					MaxProbe:    tt.maxProbe,
 					JSONOutput:  tt.jsonOutput,
+					Minor:       true,
 					Client:      &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
 				}
 
@@ -145,7 +146,7 @@ require github.com/foo/bar v1.0.0
 
 	t.Run("SingleCheckerFileOutput", func(t *testing.T) {
 		dir := t.TempDir()
-		p := writeModFile(t, dir, "module example.com/test\ngo 1.21\nrequire github.com/foo/bar v1.0.0\n")
+		p := testutil.WriteModFile(t, dir, "module example.com/test\ngo 1.21\nrequire github.com/foo/bar v1.0.0\n")
 
 		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 			if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
@@ -170,6 +171,7 @@ require github.com/foo/bar v1.0.0
 					ModFilePath: p,
 					MaxProbe:    2,
 					OutputPath:  outPath,
+					Minor:       true,
 					Client:      &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
 				}
 
@@ -227,6 +229,7 @@ require github.com/foo/bar v1.0.0
 				return configPath, &config.Config{
 					MaxProbe:   2,
 					ConfigPath: configPath,
+					Minor:      true,
 				}, yamlCfg
 			}
 		}
@@ -236,8 +239,8 @@ require github.com/foo/bar v1.0.0
 			for _, res := range output.Results {
 				if filepath.Base(res.Source) == "local.mod" {
 					localFound = true
-					if res.SourceType != localSource {
-						t.Errorf("source %s type = %q, want 'local'", res.Source, res.SourceType)
+					if res.SourceType != source.Local {
+						t.Errorf("source %s type = %q, want %q", res.Source, res.SourceType, source.Local)
 					}
 					if len(res.Dependencies) != 1 {
 						t.Fatalf("expected 1 dependency for local, got %d", len(res.Dependencies))
@@ -274,6 +277,7 @@ require github.com/foo/bar v1.0.0
 							MaxProbe:    2,
 							GitHubRepos: []string{serverURL + "/owner/repo/main/go.mod"},
 							OutputPath:  outputPath,
+							Minor:       true,
 						}, config.YAMLConfig{
 							Github: []string{serverURL + "/owner/repo/main/go.mod"},
 						}
@@ -281,8 +285,8 @@ require github.com/foo/bar v1.0.0
 				wantResultsLen: 1,
 				verify: func(t *testing.T, output format.YAMLOutput, _ string) {
 					res := output.Results[0]
-					if res.SourceType != githubSource {
-						t.Errorf("source type = %q, want 'github'", res.SourceType)
+					if res.SourceType != source.GitHub {
+						t.Errorf("source type = %q, want %q", res.SourceType, source.GitHub)
 					}
 					if len(res.Dependencies) != 1 {
 						t.Fatalf("expected 1 dependency, got %d", len(res.Dependencies))
@@ -328,6 +332,7 @@ require github.com/foo/bar v1.0.0
 					return configPath, &config.Config{
 						MaxProbe:   2,
 						ConfigPath: configPath,
+						Minor:      true,
 					}, yamlCfg
 				},
 				wantResultsLen: 2,
@@ -336,9 +341,9 @@ require github.com/foo/bar v1.0.0
 					githubCount := 0
 					for _, res := range output.Results {
 						switch res.SourceType {
-						case localSource:
+						case source.Local:
 							localCount++
-						case githubSource:
+						case source.GitHub:
 							githubCount++
 						}
 					}
@@ -359,6 +364,7 @@ require github.com/foo/bar v1.0.0
 							MaxProbe:    2,
 							GitHubRepos: []string{reposStr},
 							OutputPath:  outputPath,
+							Minor:       true,
 						}, config.YAMLConfig{
 							Github: []string{reposStr},
 						}
@@ -369,8 +375,8 @@ require github.com/foo/bar v1.0.0
 						t.Fatalf("expected 1 result, got %d", len(output.Results))
 					}
 					res := output.Results[0]
-					if res.SourceType != githubSource {
-						t.Errorf("source type = %q, want 'github'", res.SourceType)
+					if res.SourceType != source.GitHub {
+						t.Errorf("source type = %q, want %q", res.SourceType, source.GitHub)
 					}
 					if len(res.Dependencies) != 1 {
 						t.Fatalf("expected 1 dependency, got %d", len(res.Dependencies))
@@ -410,6 +416,7 @@ require github.com/foo/baz v1.0.0
 					HTTPClient: server.Client(),
 					ProxyBase:  server.URL,
 				}
+				testConfig.GitHubHTTPClient = server.Client()
 
 				outputPath := testConfig.OutputPath
 				if configPath != "" {
@@ -422,7 +429,7 @@ require github.com/foo/baz v1.0.0
 					testYamlCfg.Output = outputPath
 				}
 
-				singleMode := configPath == "" && len(testConfig.GitHubRepos) == 0 && len(testYamlCfg.Local) == 0 && len(testYamlCfg.Github) == 0
+				singleMode := isSingleMode(testConfig, testYamlCfg)
 				err := runCheckerWithConfig(context.Background(), testConfig, testYamlCfg, singleMode)
 				if err != nil {
 					t.Fatalf("runCheckerWithConfig failed: %v", err)
@@ -473,8 +480,8 @@ require github.com/foo/baz v1.0.0
 			MaxProbe: 0,
 			Minor:    true,
 		}
-		cfg.Client.DisableMinor = false
-		cfg.Client.DisableMajor = true
+		cfg.Client.(*checker.Client).DisableMinor = false
+		cfg.Client.(*checker.Client).DisableMajor = true
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel() // immediately cancel the context
@@ -489,7 +496,7 @@ require github.com/foo/baz v1.0.0
 			})
 		}
 
-		cfg.Client.HTTPClient = server.Client()
+		cfg.Client.(*checker.Client).HTTPClient = server.Client()
 		eng := engine.New(cfg)
 		results, _ := eng.CheckDependencies(ctx, reqs)
 		if len(results) != 0 {

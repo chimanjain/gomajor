@@ -13,6 +13,7 @@ import (
 
 	"github.com/chimanjain/gomajor/pkg/checker"
 	"github.com/chimanjain/gomajor/pkg/config"
+	"github.com/chimanjain/gomajor/pkg/source"
 	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
 )
@@ -159,7 +160,7 @@ func TestRunLocalSource(t *testing.T) {
 	}
 
 	res := results[0]
-	if res.Source != modPath || res.SourceType != "local" {
+	if res.Source != modPath || res.SourceType != source.Local {
 		t.Errorf("Unexpected source info: %s (%s)", res.Source, res.SourceType)
 	}
 

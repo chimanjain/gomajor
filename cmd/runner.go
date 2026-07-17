@@ -11,7 +11,6 @@ import (
 	"github.com/chimanjain/gomajor/pkg/config"
 	"github.com/chimanjain/gomajor/pkg/engine"
 	"github.com/chimanjain/gomajor/pkg/format"
-	"github.com/chimanjain/gomajor/utils"
 	"github.com/fatih/color"
 	"github.com/mattn/go-isatty"
 )
@@ -37,7 +36,8 @@ func runCheckerWithConfig(ctx context.Context, cfg *config.Config, yamlCfg confi
 		color.NoColor = true
 	}
 
-	cfg.GitHubRepos = normalizeGitHubRepos(cfg.GitHubRepos)
+	// GitHub repo normalisation and deduplication is handled inside
+	// engine.RunMultiSources via normalizeSources. Pass raw values through.
 
 	if cfg.Err == os.Stderr && isatty.IsTerminal(os.Stderr.Fd()) && !cfg.JSONOutput {
 		cfg.OnProgress = func(completed, total int) {
@@ -101,19 +101,8 @@ func writeOutput(cfg *config.Config, results []engine.SourceResult, singleMode b
 		return format.PrintMultiJSONResults(cfg.Out, results)
 	}
 
-	disableMinor := false
-	if cfg.Client != nil {
-		disableMinor = cfg.Client.DisableMinor
-	}
-	format.PrintTextResults(cfg.Out, results, singleMode, disableMinor)
+	// Use cfg.Minor directly: the client was constructed with the correct
+	// WithDisableMinor option, so cfg.Minor is the single source of truth.
+	format.PrintTextResults(cfg.Out, results, singleMode, !cfg.Minor)
 	return nil
-}
-
-func normalizeGitHubRepos(repos []string) []string {
-	var normalized []string
-	for _, repo := range repos {
-		parts := utils.NormalizeSplitString(repo)
-		normalized = append(normalized, parts...)
-	}
-	return normalized
 }

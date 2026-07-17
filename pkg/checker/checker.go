@@ -14,8 +14,8 @@ import (
 	"sync"
 
 	"github.com/cenkalti/backoff/v7"
+	"github.com/chimanjain/gomajor/internal/modpath"
 	"github.com/chimanjain/gomajor/pkg/constants"
-	"github.com/chimanjain/gomajor/utils"
 	"golang.org/x/mod/module"
 	"golang.org/x/mod/semver"
 	"golang.org/x/sync/singleflight"
@@ -26,6 +26,16 @@ const (
 	directProxy  = "direct"
 	offProxy     = "off"
 )
+
+// ModChecker is the interface satisfied by *Client and accepted by config.Config.
+// It allows callers to substitute a test double without constructing a real HTTP
+// client.
+type ModChecker interface {
+	// Check analyses a single module and returns update information.
+	Check(ctx context.Context, modPath, modVersion string, maxProbe int) ModuleInfo
+	// Close releases any idle HTTP connections held by the implementation.
+	Close()
+}
 
 // Client handles HTTP requests to the Go module proxy.
 type Client struct {
@@ -96,7 +106,8 @@ func NewClient(opts ...Option) *Client {
 
 // DefaultClient returns a client configured from environment variables
 // (GOPROXY) with production-grade HTTP transport settings.
-func DefaultClient() *Client {
+// Any provided opts are applied after the environment-based configuration.
+func DefaultClient(opts ...Option) *Client {
 	proxy := os.Getenv("GOPROXY")
 	if proxy == "" {
 		proxy = defaultProxy
@@ -138,13 +149,17 @@ func DefaultClient() *Client {
 		transport = cloned
 	}
 
-	return NewClient(
+	c := NewClient(
 		WithHTTPClient(&http.Client{
 			Timeout:   constants.HTTPTimeout,
 			Transport: transport,
 		}),
 		WithProxyURLs(proxyURLs),
 	)
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 func (c *Client) lazyInit() {
@@ -326,7 +341,7 @@ func (c *Client) fetchFromProxy(ctx context.Context, proxyURL, escaped string) (
 			var info struct {
 				Version string `json:"Version"`
 			}
-			limitReader := io.LimitReader(resp.Body, 10*constants.MB)
+			limitReader := io.LimitReader(resp.Body, constants.ProxyResponseMaxBytes)
 			if err := json.NewDecoder(limitReader).Decode(&info); err != nil || info.Version == "" {
 				return "", backoff.Permanent(fmt.Errorf("invalid json: %w", err))
 			}
@@ -358,7 +373,7 @@ func (c *Client) fetchFromProxy(ctx context.Context, proxyURL, escaped string) (
 // the module path for it.
 func (c *Client) FindLatestMajor(ctx context.Context, basePath string, currentMajor int, maxProbe int, sep string) (latestMajor int, latestPath string, latestVer string) {
 	latestMajor = currentMajor
-	latestPath = utils.NextMajorPath(basePath, currentMajor, sep)
+	latestPath = modpath.NextMajorPath(basePath, currentMajor, sep)
 
 	remainingStart := currentMajor + 1
 	remainingEnd := currentMajor + maxProbe
@@ -370,7 +385,7 @@ func (c *Client) FindLatestMajor(ctx context.Context, basePath string, currentMa
 		if ctx.Err() != nil {
 			break
 		}
-		candPath := utils.NextMajorPath(basePath, cand, sep)
+		candPath := modpath.NextMajorPath(basePath, cand, sep)
 		ver, ok := c.latestVersion(ctx, candPath)
 		if ok {
 			latestMajor = cand
@@ -388,7 +403,7 @@ func (c *Client) FindLatestMajor(ctx context.Context, basePath string, currentMa
 
 // Check analyses a single module (path + version from go.mod) and returns a ModuleInfo.
 func (c *Client) Check(ctx context.Context, modPath, modVersion string, maxProbe int) ModuleInfo {
-	basePath, currentMajor, sep := utils.ParseModulePath(modPath)
+	basePath, currentMajor, sep := modpath.ParseModulePath(modPath)
 	if semver.IsValid(modVersion) {
 		majorStr := semver.Major(modVersion)
 		if len(majorStr) > 1 && majorStr[0] == 'v' {
@@ -408,19 +423,28 @@ func (c *Client) Check(ctx context.Context, modPath, modVersion string, maxProbe
 		Separator:      sep,
 	}
 
+	// Use local variables per goroutine to avoid data races on the shared
+	// info struct. Results are merged into info only after wg.Wait().
 	var wg sync.WaitGroup
+
+	var (
+		latestMajor     int
+		latestMajorPath string
+		latestMajorVer  string
+		hasMajorUpdate  bool
+	)
 
 	if !c.DisableMajor {
 		wg.Go(func() {
-			latestMajor, latestPath, latestVer := c.FindLatestMajor(ctx, basePath, currentMajor, maxProbe, sep)
-			info.LatestMajor = latestMajor
-			info.LatestMajorPath = latestPath
-			info.LatestMajorVersion = latestVer
-			info.HasUpdate = latestMajor > currentMajor
+			lm, lp, lv := c.FindLatestMajor(ctx, basePath, currentMajor, maxProbe, sep)
+			latestMajor = lm
+			latestMajorPath = lp
+			latestMajorVer = lv
+			hasMajorUpdate = lm > currentMajor
 		})
 	} else {
-		info.LatestMajor = currentMajor
-		info.LatestMajorPath = modPath
+		latestMajor = currentMajor
+		latestMajorPath = modPath
 	}
 
 	var latestMinor string
@@ -437,6 +461,16 @@ func (c *Client) Check(ctx context.Context, modPath, modVersion string, maxProbe
 
 	wg.Wait()
 
+	// Merge goroutine results into info after all goroutines have finished.
+	if !c.DisableMajor {
+		info.LatestMajor = latestMajor
+		info.LatestMajorPath = latestMajorPath
+		info.LatestMajorVersion = latestMajorVer
+		info.HasUpdate = hasMajorUpdate
+	} else {
+		info.LatestMajor = currentMajor
+		info.LatestMajorPath = modPath
+	}
 	info.LatestMinorVersion = latestMinor
 	info.HasMinorUpdate = hasMinorUpdate
 

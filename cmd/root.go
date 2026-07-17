@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 
+	"github.com/chimanjain/gomajor/pkg/checker"
 	"github.com/chimanjain/gomajor/pkg/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -32,8 +33,15 @@ available for your dependencies.`,
 			if err != nil {
 				return fmt.Errorf("error parsing configuration: %w", err)
 			}
-			cfg.Client.DisableMinor = !cfg.Minor
-			cfg.Client.DisableMajor = !cfg.Major
+
+			// Build a fresh client with the correct minor/major settings instead
+			// of mutating the default client created by DefaultConfig.
+			client := checker.DefaultClient(
+				checker.WithDisableMinor(!cfg.Minor),
+				checker.WithDisableMajor(!cfg.Major),
+			)
+			cfg.Client = client
+			cfg.GitHubHTTPClient = client.HTTPClient
 
 			logLevel := slog.LevelInfo
 			if cfg.Verbose {
@@ -44,13 +52,12 @@ available for your dependencies.`,
 			})
 			cfg.Logger = slog.New(handler)
 
-			singleMode := cfg.ConfigPath == "" && len(cfg.GitHubRepos) == 0 && len(yamlCfg.Local) == 0 && len(yamlCfg.Github) == 0
-			return runCheckerWithConfig(cmd.Context(), cfg, yamlCfg, singleMode)
+			return runCheckerWithConfig(cmd.Context(), cfg, yamlCfg, isSingleMode(cfg, yamlCfg))
 		},
 	}
 
 	cmd.SetVersionTemplate("{{.Version}}\n")
-	cmd.Flags().StringP("file", "f", "", "Path to the go.mod file (default: auto-detect in current directory or binary directory)")
+	cmd.Flags().StringP("file", "f", "", "Path to the go.mod file (default: auto-detect in current directory)")
 	cmd.Flags().IntP("max-probe", "m", 5, "Maximum number of subsequent major versions to probe for")
 	cmd.Flags().BoolP("all", "a", false, "Check all dependencies, including indirect ones (by default only direct dependencies are checked)")
 	cmd.Flags().Bool("json", false, "Output results in JSON format")
@@ -90,12 +97,10 @@ func parseConfig(cmd *cobra.Command) (*config.Config, config.YAMLConfig, error) 
 				return nil, config.YAMLConfig{}, fmt.Errorf("reading config file %s: %w", configPath, err)
 			}
 		} else {
-			vFile := viper.New()
-			vFile.SetConfigFile(configPath)
-			if err := vFile.ReadInConfig(); err == nil {
-				if err := vFile.Unmarshal(&fileYamlCfg); err != nil {
-					return nil, config.YAMLConfig{}, fmt.Errorf("parsing config file %s: %w", configPath, err)
-				}
+			// Single viper instance: unmarshal the already-read config into the
+			// YAML struct. A second viper.ReadInConfig call is not needed.
+			if err := v.Unmarshal(&fileYamlCfg); err != nil {
+				return nil, config.YAMLConfig{}, fmt.Errorf("parsing config file %s: %w", configPath, err)
 			}
 		}
 	}
@@ -106,17 +111,42 @@ func parseConfig(cmd *cobra.Command) (*config.Config, config.YAMLConfig, error) 
 	cfg.CheckAll = v.GetBool("all")
 	cfg.JSONOutput = v.GetBool("json")
 	cfg.NoColor = v.GetBool("no-color")
-	cfg.Minor = v.GetBool("minor")
-	cfg.Major = v.GetBool("major")
 	cfg.Verbose = v.GetBool("verbose")
 	cfg.ConfigPath = configPath
-	cfg.OutputPath = v.GetString("output")
-	if cmd.Flags().Changed("output") && cfg.OutputPath == "" {
-		if cfg.JSONOutput {
-			cfg.OutputPath = "gomajor-report.json"
-		} else {
-			cfg.OutputPath = "gomajor-report.yaml"
+
+	// Strict config merging: CLI flag (explicitly set) > YAML file > Defaults
+	switch {
+	case cmd.Flags().Changed("minor"):
+		cfg.Minor = v.GetBool("minor")
+	case fileYamlCfg.Minor != nil:
+		cfg.Minor = *fileYamlCfg.Minor
+	default:
+		cfg.Minor = v.GetBool("minor")
+	}
+
+	switch {
+	case cmd.Flags().Changed("major"):
+		cfg.Major = v.GetBool("major")
+	case fileYamlCfg.Major != nil:
+		cfg.Major = *fileYamlCfg.Major
+	default:
+		cfg.Major = v.GetBool("major")
+	}
+
+	switch {
+	case cmd.Flags().Changed("output"):
+		cfg.OutputPath = v.GetString("output")
+		if cfg.OutputPath == "" {
+			if cfg.JSONOutput {
+				cfg.OutputPath = "gomajor-report.json"
+			} else {
+				cfg.OutputPath = "gomajor-report.yaml"
+			}
 		}
+	case fileYamlCfg.Output != "":
+		cfg.OutputPath = fileYamlCfg.Output
+	default:
+		cfg.OutputPath = ""
 	}
 
 	cliGithub, _ := cmd.Flags().GetStringSlice("github")
@@ -126,9 +156,18 @@ func parseConfig(cmd *cobra.Command) (*config.Config, config.YAMLConfig, error) 
 		Local:  fileYamlCfg.Local,
 		Github: append(fileYamlCfg.Github, cliGithub...),
 		Output: cfg.OutputPath,
+		Minor:  &cfg.Minor,
+		Major:  &cfg.Major,
 	}
 
 	return cfg, yamlCfg, nil
+}
+
+// isSingleMode reports whether the invocation targets a single local go.mod
+// (no config file, no GitHub repos, no multi-source YAML entries). Extracting
+// this predicate avoids duplicating the condition in both the command and tests.
+func isSingleMode(cfg *config.Config, yamlCfg config.YAMLConfig) bool {
+	return cfg.ConfigPath == "" && len(cfg.GitHubRepos) == 0 && len(yamlCfg.Local) == 0 && len(yamlCfg.Github) == 0
 }
 
 func Execute() {
@@ -144,11 +183,8 @@ func Execute() {
 }
 
 // resolveModFile returns the path to use for go.mod, auto-discovering it when
-// the user did not explicitly pass --file. It checks:
-//  1. The current working directory.
-//  2. The directory that contains the running binary.
+// the user did not explicitly pass --file. It checks the current working directory.
 func resolveModFile() (string, error) {
-	// 1. Current working directory.
 	cwd, err := os.Getwd()
 	if err == nil {
 		candidate := filepath.Join(cwd, "go.mod")
@@ -157,14 +193,5 @@ func resolveModFile() (string, error) {
 		}
 	}
 
-	// 2. Directory of the binary itself.
-	exe, err := os.Executable()
-	if err == nil {
-		candidate := filepath.Join(filepath.Dir(exe), "go.mod")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
-		}
-	}
-
-	return "", fmt.Errorf("no go.mod found in current directory (%s) or binary directory; use --file to specify a path", cwd)
+	return "", fmt.Errorf("no go.mod found in current directory (%s); use --file to specify a path", cwd)
 }

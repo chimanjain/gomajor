@@ -30,5 +30,14 @@ const (
 	// DefaultMaxProbe is the default maximum number of major versions to probe.
 	DefaultMaxProbe = 5
 
+	// MB is one mebibyte (1024 × 1024 bytes).
 	MB = 1024 * 1024
+
+	// ProxyResponseMaxBytes is the maximum number of bytes read from a Go module
+	// proxy response body, guarding against memory exhaustion.
+	ProxyResponseMaxBytes = 10 * MB
+
+	// GitHubModMaxBytes is the maximum number of bytes read when fetching a
+	// remote go.mod file from GitHub, guarding against memory exhaustion.
+	GitHubModMaxBytes = 5 * MB
 )
