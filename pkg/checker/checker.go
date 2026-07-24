@@ -391,10 +391,6 @@ func (c *Client) FindLatestMajor(ctx context.Context, basePath string, currentMa
 			latestMajor = cand
 			latestPath = candPath
 			latestVer = ver
-		} else {
-			// If a major version is missing, assume subsequent ones are also missing
-			// to avoid spamming the proxy with unnecessary requests.
-			break
 		}
 	}
 
