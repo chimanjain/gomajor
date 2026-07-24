@@ -64,6 +64,10 @@ func TestClient(t *testing.T) {
 			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v1.0.0"})
 		case "/github.com/gap/mod/v3/@latest":
 			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v3.0.0"})
+		case "/github.com/!masterminds/semver/@latest":
+			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v1.5.0"})
+		case "/github.com/!masterminds/semver/v3/@latest":
+			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v3.3.0"})
 		case "/badjson/@latest":
 			_, _ = rw.Write([]byte(`{"Version":`)) // malformed JSON
 		default:
@@ -86,6 +90,16 @@ func TestClient(t *testing.T) {
 			wantMinorUpdate bool
 			wantMinorVer    string
 		}{
+			{
+				name:            "MastermindsSemverMajorGapUpdate",
+				modPath:         "github.com/Masterminds/semver",
+				version:         "v1.5.0",
+				wantUpdate:      true,
+				wantMajor:       3,
+				wantMajorPath:   "github.com/Masterminds/semver/v3",
+				wantMajorVer:    "v3.3.0",
+				wantMinorUpdate: false,
+			},
 			{
 				name:            "StandardMajorUpdate",
 				modPath:         "github.com/foo/bar/v2",
@@ -203,16 +217,16 @@ func TestClient(t *testing.T) {
 			t.Errorf("Expected version v3.1.0, got %s", ver)
 		}
 
-		// Test that gaps in major versions are not probed further to optimize request counts (Option A)
+		// Test that gaps in major versions (e.g. Masterminds/semver jumping v1->v3) are probed up to maxProbe
 		majorGap, pathGap, verGap := client.FindLatestMajor(context.Background(), "github.com/gap/mod", 1, 5, "/")
-		if majorGap != 1 {
-			t.Errorf("Expected major 1 (stopped due to missing v2), got %d", majorGap)
+		if majorGap != 3 {
+			t.Errorf("Expected major 3 (probing across missing v2), got %d", majorGap)
 		}
-		if pathGap != "github.com/gap/mod" {
-			t.Errorf("Expected path github.com/gap/mod, got %s", pathGap)
+		if pathGap != "github.com/gap/mod/v3" {
+			t.Errorf("Expected path github.com/gap/mod/v3, got %s", pathGap)
 		}
-		if verGap != "" {
-			t.Errorf("Expected empty version, got %s", verGap)
+		if verGap != "v3.0.0" {
+			t.Errorf("Expected version v3.0.0, got %s", verGap)
 		}
 	})
 
@@ -237,7 +251,7 @@ func TestClient(t *testing.T) {
 		}))
 		defer server.Close()
 
-		t.Run("NoUpgradeOnlyOneRequest", func(t *testing.T) {
+		t.Run("NoUpgradeProbesMaxProbeRequests", func(t *testing.T) {
 			mu.Lock()
 			hits = nil
 			mu.Unlock()
@@ -246,15 +260,15 @@ func TestClient(t *testing.T) {
 				HTTPClient: server.Client(),
 				ProxyBase:  server.URL,
 			}
-			// When checking a non-existent package or package with no upgrades (e.g. starting with v5)
+			// When checking a package with no upgrades starting from v5 with maxProbe=5
 			client.FindLatestMajor(context.Background(), "github.com/foo/bar", 5, 5, "/")
 
 			mu.Lock()
 			totalHits := len(hits)
 			mu.Unlock()
 
-			if totalHits != 1 {
-				t.Errorf("Expected exactly 1 request (for v6), got %d: %v", totalHits, hits)
+			if totalHits != 5 {
+				t.Errorf("Expected 5 requests (for v6..v10), got %d: %v", totalHits, hits)
 			}
 		})
 
@@ -281,7 +295,7 @@ func TestClient(t *testing.T) {
 				t.Errorf("Expected version v4.0.0, got %s", ver)
 			}
 
-			// We check that v2, v3, v4, v5 were queried, but v6 was NOT.
+			// We check that v2, v3, v4, v5, v6 were queried, but v7 was NOT.
 			mu.Lock()
 			queryMap := make(map[string]bool)
 			for _, h := range hits {
@@ -294,14 +308,15 @@ func TestClient(t *testing.T) {
 				"/github.com/foo/bar/v3/@latest",
 				"/github.com/foo/bar/v4/@latest",
 				"/github.com/foo/bar/v5/@latest",
+				"/github.com/foo/bar/v6/@latest",
 			}
 			for _, q := range expectedQueries {
 				if !queryMap[q] {
 					t.Errorf("Expected query to %s, but it was not made", q)
 				}
 			}
-			if queryMap["/github.com/foo/bar/v6/@latest"] {
-				t.Errorf("Unexpected query to v6 was made after v5 returned 404")
+			if queryMap["/github.com/foo/bar/v7/@latest"] {
+				t.Errorf("Unexpected query to v7 was made beyond maxProbe")
 			}
 		})
 	})
