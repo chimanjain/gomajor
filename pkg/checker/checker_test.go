@@ -681,3 +681,26 @@ func TestNewClient(t *testing.T) {
 		}
 	})
 }
+
+func BenchmarkFindLatestMajor(b *testing.B) {
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/github.com/foo/bar/v2/@latest":
+			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
+		case "/github.com/foo/bar/v3/@latest":
+			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v3.0.0"})
+		default:
+			rw.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		HTTPClient: server.Client(),
+		ProxyBase:  server.URL,
+	}
+
+	for b.Loop() {
+		_, _, _ = client.FindLatestMajor(context.Background(), "github.com/foo/bar", 1, 5, "/")
+	}
+}
