@@ -36,6 +36,9 @@ available for your dependencies.`,
 
 			// Build a fresh client with the correct minor/major settings instead
 			// of mutating the default client created by DefaultConfig.
+			if cfg.Client != nil {
+				cfg.Client.Close()
+			}
 			client := checker.DefaultClient(
 				checker.WithDisableMinor(!cfg.Minor),
 				checker.WithDisableMajor(!cfg.Major),

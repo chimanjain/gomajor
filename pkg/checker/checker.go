@@ -339,11 +339,15 @@ func (c *Client) fetchFromProxy(ctx context.Context, proxyURL, escaped string) (
 		defer resp.Body.Close()
 
 		if resp.StatusCode == http.StatusOK {
+			limitReader := io.LimitReader(resp.Body, constants.ProxyResponseMaxBytes)
+			data, err := io.ReadAll(limitReader)
+			if err != nil {
+				return "", backoff.Permanent(fmt.Errorf("read body: %w", err))
+			}
 			var info struct {
 				Version string `json:"Version"`
 			}
-			limitReader := io.LimitReader(resp.Body, constants.ProxyResponseMaxBytes)
-			if err := json.NewDecoder(limitReader).Decode(&info); err != nil || info.Version == "" {
+			if err := json.Unmarshal(data, &info); err != nil || info.Version == "" {
 				return "", backoff.Permanent(fmt.Errorf("invalid json: %w", err))
 			}
 			return info.Version, nil

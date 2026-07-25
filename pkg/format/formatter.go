@@ -69,6 +69,11 @@ func visualLen(s string) int {
 			i += 2
 			continue
 		}
+		if s[i] < utf8.RuneSelf {
+			count++
+			i++
+			continue
+		}
 		r, size := utf8.DecodeRuneInString(s[i:])
 		if size == 0 {
 			break
@@ -84,12 +89,18 @@ func visualLen(s string) int {
 	return count
 }
 
+var spaces = []byte("                                                                                                                                                                                                        ")
+
 func pad(s string, w int) string {
 	vlen := visualLen(s)
 	if vlen >= w {
 		return s
 	}
-	return s + strings.Repeat(" ", w-vlen)
+	need := w - vlen
+	if need <= len(spaces) {
+		return s + string(spaces[:need])
+	}
+	return s + strings.Repeat(" ", need)
 }
 
 func formatRow(mod, current, minorVer string, hasMinor bool, majorVer, majorPath string, hasMajor bool) []string {

@@ -36,8 +36,8 @@ type checkTask struct {
 // This is the single authoritative deduplication point for all source types;
 // callers (e.g. cmd/runner.go) should pass raw values and rely on this function.
 func normalizeSources(yamlCfg *config.YAMLConfig) {
-	seenLocal := make(map[string]bool)
-	var uniqueLocal []string
+	seenLocal := make(map[string]bool, len(yamlCfg.Local))
+	uniqueLocal := make([]string, 0, len(yamlCfg.Local))
 	for _, p := range yamlCfg.Local {
 		if !seenLocal[p] {
 			seenLocal[p] = true
@@ -46,8 +46,8 @@ func normalizeSources(yamlCfg *config.YAMLConfig) {
 	}
 	yamlCfg.Local = uniqueLocal
 
-	seenGithub := make(map[string]bool)
-	var uniqueGithub []string
+	seenGithub := make(map[string]bool, len(yamlCfg.Github))
+	uniqueGithub := make([]string, 0, len(yamlCfg.Github))
 	for _, p := range yamlCfg.Github {
 		parts := utils.NormalizeSplitString(p)
 		for _, part := range parts {
@@ -95,7 +95,7 @@ func (e *Engine) parseAllSources(ctx context.Context, tasks []checkTask) ([]sour
 		return nil, err
 	}
 
-	var validSources []source.ParsedSource
+	validSources := make([]source.ParsedSource, 0, len(parsedSources))
 	for _, ps := range parsedSources {
 		if ps.Source != "" {
 			validSources = append(validSources, ps)
