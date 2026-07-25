@@ -18,6 +18,7 @@ import (
 	"github.com/chimanjain/gomajor/pkg/constants"
 	"golang.org/x/mod/module"
 	"golang.org/x/mod/semver"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -368,9 +369,16 @@ func (c *Client) fetchFromProxy(ctx context.Context, proxyURL, escaped string) (
 	return "", false, false
 }
 
+type candResult struct {
+	major int
+	path  string
+	ver   string
+	ok    bool
+}
+
 // FindLatestMajor probes the Go proxy for higher major versions beyond currentMajor,
 // up to a configurable ceiling. It returns the highest major version found and
-// the module path for it.
+// the module path for it. Candidate major versions are probed concurrently.
 func (c *Client) FindLatestMajor(ctx context.Context, basePath string, currentMajor int, maxProbe int, sep string) (latestMajor int, latestPath string, latestVer string) {
 	latestMajor = currentMajor
 	latestPath = modpath.NextMajorPath(basePath, currentMajor, sep)
@@ -381,16 +389,35 @@ func (c *Client) FindLatestMajor(ctx context.Context, basePath string, currentMa
 		return latestMajor, latestPath, latestVer
 	}
 
-	for cand := remainingStart; cand <= remainingEnd; cand++ {
-		if ctx.Err() != nil {
-			break
-		}
+	count := remainingEnd - remainingStart + 1
+	results := make([]candResult, count)
+
+	g, gCtx := errgroup.WithContext(ctx)
+	for i := range count {
+		cand := remainingStart + i
 		candPath := modpath.NextMajorPath(basePath, cand, sep)
-		ver, ok := c.latestVersion(ctx, candPath)
-		if ok {
-			latestMajor = cand
-			latestPath = candPath
-			latestVer = ver
+		g.Go(func() error {
+			if gCtx.Err() != nil {
+				return gCtx.Err()
+			}
+			ver, ok := c.latestVersion(gCtx, candPath)
+			results[i] = candResult{
+				major: cand,
+				path:  candPath,
+				ver:   ver,
+				ok:    ok,
+			}
+			return nil
+		})
+	}
+
+	_ = g.Wait()
+
+	for _, res := range results {
+		if res.ok {
+			latestMajor = res.major
+			latestPath = res.path
+			latestVer = res.ver
 		}
 	}
 

@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/cenkalti/backoff/v7 v7.0.0
 	github.com/fatih/color v1.19.0
-	github.com/mattn/go-isatty v0.0.23
+	github.com/mattn/go-isatty v0.0.24
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	go.yaml.in/yaml/v3 v3.0.4
