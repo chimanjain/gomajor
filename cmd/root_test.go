@@ -38,15 +38,7 @@ func TestResolveModFile(t *testing.T) {
 				testutil.WriteModFile(t, dir, "module example.com/test\n\ngo 1.21\n")
 			}
 
-			orig, err := os.Getwd()
-			if err != nil {
-				t.Fatalf("os.Getwd: %v", err)
-			}
-			defer os.Chdir(orig) //nolint:errcheck
-
-			if err := os.Chdir(dir); err != nil {
-				t.Fatalf("os.Chdir: %v", err)
-			}
+			t.Chdir(dir)
 
 			got, err := resolveModFile()
 			if (err != nil) != tt.wantErr {
@@ -183,17 +175,9 @@ func TestRootCmd(t *testing.T) {
 }
 
 func TestConfigMerging(t *testing.T) {
-	orig, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("os.Getwd: %v", err)
-	}
-	defer os.Chdir(orig) //nolint:errcheck
-
 	t.Run("YAMLConfigOnly", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := os.Chdir(dir); err != nil {
-			t.Fatalf("os.Chdir: %v", err)
-		}
+		t.Chdir(dir)
 
 		configContent := `
 minor: false
@@ -227,9 +211,7 @@ output: my-custom-report.json
 
 	t.Run("CLIOverridesYAML", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := os.Chdir(dir); err != nil {
-			t.Fatalf("os.Chdir: %v", err)
-		}
+		t.Chdir(dir)
 
 		configContent := `
 minor: false

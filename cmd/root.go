@@ -34,11 +34,8 @@ available for your dependencies.`,
 				return fmt.Errorf("error parsing configuration: %w", err)
 			}
 
-			// Build a fresh client with the correct minor/major settings instead
-			// of mutating the default client created by DefaultConfig.
-			if cfg.Client != nil {
-				cfg.Client.Close()
-			}
+			// Build the client with the correct minor/major settings.
+			// DefaultConfig leaves Client nil to avoid a wasted allocation.
 			client := checker.DefaultClient(
 				checker.WithDisableMinor(!cfg.Minor),
 				checker.WithDisableMajor(!cfg.Major),

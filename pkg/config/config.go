@@ -46,24 +46,25 @@ type YAMLConfig struct {
 }
 
 // DefaultConfig returns a config with standard settings.
+// Client and GitHubHTTPClient are left nil; the caller is responsible for
+// constructing them with the desired options (e.g. minor/major flags) to
+// avoid creating a client that is immediately discarded and replaced.
 func DefaultConfig() *Config {
-	client := checker.DefaultClient()
 	return &Config{
-		ModFilePath:      "",
-		MaxProbe:         constants.DefaultMaxProbe,
-		CheckAll:         false,
-		JSONOutput:       false,
-		NoColor:          false,
-		Minor:            true,
-		Major:            true,
-		Verbose:          false,
-		Client:           client,
-		GitHubHTTPClient: client.HTTPClient,
-		ConfigPath:       "",
-		OutputPath:       "",
-		GitHubRepos:      nil,
-		Out:              os.Stdout,
-		Err:              os.Stderr,
-		Logger:           slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		ModFilePath: "",
+		MaxProbe:    constants.DefaultMaxProbe,
+		CheckAll:    false,
+		JSONOutput:  false,
+		NoColor:     false,
+		Minor:       true,
+		Major:       true,
+		Verbose:     false,
+		ConfigPath:  "",
+		OutputPath:  "",
+		GitHubRepos: nil,
+		Out:         os.Stdout,
+		Err:         os.Stderr,
+		Logger:      slog.New(slog.NewTextHandler(os.Stderr, nil)),
 	}
 }
+

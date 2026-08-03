@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"github.com/cenkalti/backoff/v7"
 	"github.com/chimanjain/gomajor/internal/modpath"
 	"github.com/chimanjain/gomajor/pkg/constants"
+	"github.com/chimanjain/gomajor/utils"
 	"golang.org/x/mod/module"
 	"golang.org/x/mod/semver"
 	"golang.org/x/sync/errgroup"
@@ -109,7 +109,7 @@ func NewClient(opts ...Option) *Client {
 // (GOPROXY) with production-grade HTTP transport settings.
 // Any provided opts are applied after the environment-based configuration.
 func DefaultClient(opts ...Option) *Client {
-	proxy := os.Getenv("GOPROXY")
+	proxy := utils.GetGoEnv("GOPROXY")
 	if proxy == "" {
 		proxy = defaultProxy
 	}
@@ -212,9 +212,9 @@ type ModuleInfo struct {
 // getPrivateGlobs reads GONOPROXY / GOPRIVATE lazily on each call so that
 // changes made after package init (e.g., t.Setenv in tests) are respected.
 func getPrivateGlobs() string {
-	globs := os.Getenv("GONOPROXY")
+	globs := utils.GetGoEnv("GONOPROXY")
 	if globs == "" {
-		globs = os.Getenv("GOPRIVATE")
+		globs = utils.GetGoEnv("GOPRIVATE")
 	}
 	return globs
 }
