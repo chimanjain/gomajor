@@ -6,11 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 
 	"github.com/cenkalti/backoff/v7"
 	"github.com/chimanjain/gomajor/pkg/constants"
+	"github.com/chimanjain/gomajor/utils"
 )
 
 // getGithubRawURLs normalizes a GitHub path or URL into candidate raw URL(s).
@@ -112,10 +112,10 @@ func resolveGithubToken(pathOrURL string) string {
 		}
 	}
 	if token == "" {
-		token = os.Getenv("GITHUB_TOKEN")
+		token = utils.GetGoEnv("GITHUB_TOKEN")
 	}
 	if token == "" {
-		token = os.Getenv("GITHUB_PAT")
+		token = utils.GetGoEnv("GITHUB_PAT")
 	}
 	return token
 }

@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"github.com/chimanjain/gomajor/pkg/checker"
 	"github.com/chimanjain/gomajor/pkg/source"
 )
 
@@ -21,20 +20,4 @@ type SourceResult struct {
 	Source       string           `yaml:"source" json:"source"`
 	SourceType   source.Type      `yaml:"source_type" json:"source_type"`
 	Dependencies []DependencyInfo `yaml:"dependencies" json:"dependencies"`
-}
-
-func ToDependencyInfos(results []checker.ModuleInfo) []DependencyInfo {
-	depInfos := make([]DependencyInfo, len(results))
-	for i, info := range results {
-		depInfos[i] = DependencyInfo{
-			Module:             info.Current,
-			CurrentVersion:     info.CurrentVersion,
-			LatestMajorVersion: info.LatestMajorVersion,
-			LatestMajorPath:    info.LatestMajorPath,
-			HasUpdate:          info.HasUpdate,
-			LatestMinorVersion: info.LatestMinorVersion,
-			HasMinorUpdate:     info.HasMinorUpdate,
-		}
-	}
-	return depInfos
 }
