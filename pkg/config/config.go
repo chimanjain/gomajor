@@ -67,4 +67,3 @@ func DefaultConfig() *Config {
 		Logger:      slog.New(slog.NewTextHandler(os.Stderr, nil)),
 	}
 }
-
