@@ -16,7 +16,7 @@ import (
 )
 
 // Version is the current version of gomajor.
-const Version = "v1.8.0"
+const Version = "v1.10.0"
 
 var rootCmd = NewRootCmd()
 

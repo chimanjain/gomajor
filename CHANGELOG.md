@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [1.9.0] - 2026-08-03
+
+### Added
+
+- **Scan Progress Tracking**: Introduced `OnProgress` execution callbacks in `config.Config` with thread-safe atomic tracking (`atomic.Int32`) during dependency checking.
+- **Memory Safety & Response Size Limits**: Added response body read bounds (`ProxyResponseMaxBytes` = 10 MB, `GitHubModMaxBytes` = 5 MB) via `io.LimitReader` to guard against memory exhaustion from oversized proxy payloads or remote GitHub fetches.
+- **ModChecker Interface Abstraction**: Abstracted core dependency checking behind the `checker.ModChecker` interface (`Check`, `Close`) to simplify mock testing and dependency injection.
+
+### Changed
+
+- **ANSI & Unicode-Aware Terminal Alignment**: Implemented display width calculations (`visualLen`) in `pkg/format` supporting ANSI color codes and East-Asian Wide/Fullwidth Unicode characters for aligned terminal tables.
+- **Host-Scoped Token Authentication**: Enhanced GitHub authentication to restrict embedded URL tokens (`tokenSourceHost`) strictly to matching target hosts, preventing credential leakage during redirects or cross-host lookups.
+- **Unified Source Normalization**: Centralized deduplication and split-handling for local and remote GitHub sources in `normalizeSources`.
+
+---
+
 ## [1.8.0] - 2026-07-14
 
 ### Added
