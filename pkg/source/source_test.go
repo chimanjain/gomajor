@@ -50,6 +50,11 @@ func TestSanitizeURL(t *testing.T) {
 			input:    "https://github.com/owner/repo?branch=main&ref=v1.0.0",
 			expected: "https://github.com/owner/repo?branch=main&ref=v1.0.0",
 		},
+		{
+			name:     "CustomSubstringSecrets",
+			input:    "https://github.com/owner/repo?my_secret_token=abc&auth_code=123&user_credential=xyz",
+			expected: "https://github.com/owner/repo?auth_code=REDACTED&my_secret_token=REDACTED&user_credential=REDACTED",
+		},
 	}
 
 	for _, tt := range tests {
@@ -60,4 +65,31 @@ func TestSanitizeURL(t *testing.T) {
 			}
 		})
 	}
+}
+
+var (
+	_ Provider = LocalProvider{}
+	_ Provider = GitHubProvider{}
+)
+
+func TestProviders(t *testing.T) {
+	t.Run("LocalProvider", func(t *testing.T) {
+		lp := NewLocalProvider("go.mod")
+		if lp.Name() != "go.mod" {
+			t.Errorf("lp.Name() = %q, want %q", lp.Name(), "go.mod")
+		}
+		if lp.Type() != Local {
+			t.Errorf("lp.Type() = %q, want %q", lp.Type(), Local)
+		}
+	})
+
+	t.Run("GitHubProvider", func(t *testing.T) {
+		gp := NewGitHubProvider("owner/repo")
+		if gp.Name() != "owner/repo" {
+			t.Errorf("gp.Name() = %q, want %q", gp.Name(), "owner/repo")
+		}
+		if gp.Type() != GitHub {
+			t.Errorf("gp.Type() = %q, want %q", gp.Type(), GitHub)
+		}
+	})
 }

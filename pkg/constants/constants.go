@@ -30,6 +30,9 @@ const (
 	// DefaultMaxProbe is the default maximum number of major versions to probe.
 	DefaultMaxProbe = 5
 
+	// MaxAllowedMaxProbe is the maximum allowed probe limit to prevent resource exhaustion.
+	MaxAllowedMaxProbe = 50
+
 	// MB is one mebibyte (1024 × 1024 bytes).
 	MB = 1024 * 1024
 

@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"net/http"
 	"sync/atomic"
 
 	"github.com/chimanjain/gomajor/pkg/checker"
@@ -14,20 +16,57 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+type Options struct {
+	Client           checker.ModChecker
+	GitHubHTTPClient *http.Client
+	MaxProbe         int
+	CheckAll         bool
+	Logger           *slog.Logger
+	OnProgress       func(completed, total int)
+}
+
 type Engine struct {
-	Config *config.Config
+	opts Options
 }
 
+// New creates an Engine from a Config for backward compatibility.
 func New(cfg *config.Config) *Engine {
-	return &Engine{
-		Config: cfg,
+	if cfg == nil {
+		cfg = config.DefaultConfig()
 	}
+	return NewWithOptions(Options{
+		Client:           cfg.Client,
+		GitHubHTTPClient: cfg.GitHubHTTPClient,
+		MaxProbe:         cfg.MaxProbe,
+		CheckAll:         cfg.CheckAll,
+		Logger:           cfg.Logger,
+		OnProgress:       cfg.OnProgress,
+	})
 }
 
-type checkTask struct {
-	index   int
-	isLocal bool
-	path    string
+// NewWithOptions creates an Engine using explicit Options.
+func NewWithOptions(opts Options) *Engine {
+	if opts.Client == nil {
+		opts.Client = checker.DefaultClient()
+	}
+	if opts.MaxProbe <= 0 {
+		opts.MaxProbe = constants.DefaultMaxProbe
+	}
+	opts.MaxProbe = min(opts.MaxProbe, constants.MaxAllowedMaxProbe)
+	return &Engine{opts: opts}
+}
+
+// deduplicateStrings returns in with duplicates removed, preserving order.
+func deduplicateStrings(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // normalizeSources deduplicates and normalises both local paths and GitHub repo
@@ -36,57 +75,33 @@ type checkTask struct {
 // This is the single authoritative deduplication point for all source types;
 // callers (e.g. cmd/runner.go) should pass raw values and rely on this function.
 func normalizeSources(yamlCfg *config.YAMLConfig) {
-	seenLocal := make(map[string]bool, len(yamlCfg.Local))
-	uniqueLocal := make([]string, 0, len(yamlCfg.Local))
-	for _, p := range yamlCfg.Local {
-		if !seenLocal[p] {
-			seenLocal[p] = true
-			uniqueLocal = append(uniqueLocal, p)
-		}
-	}
-	yamlCfg.Local = uniqueLocal
+	yamlCfg.Local = deduplicateStrings(yamlCfg.Local)
 
-	seenGithub := make(map[string]bool, len(yamlCfg.Github))
-	uniqueGithub := make([]string, 0, len(yamlCfg.Github))
+	var githubParts []string
 	for _, p := range yamlCfg.Github {
-		parts := utils.NormalizeSplitString(p)
-		for _, part := range parts {
-			if !seenGithub[part] {
-				seenGithub[part] = true
-				uniqueGithub = append(uniqueGithub, part)
-			}
-		}
+		githubParts = append(githubParts, utils.NormalizeSplitString(p)...)
 	}
-	yamlCfg.Github = uniqueGithub
+	yamlCfg.Github = deduplicateStrings(githubParts)
 }
 
-func (e *Engine) parseAllSources(ctx context.Context, tasks []checkTask) ([]source.ParsedSource, error) {
-	parsedSources := make([]source.ParsedSource, len(tasks))
+func (e *Engine) parseAllProviders(ctx context.Context, providers []source.Provider) ([]source.ParsedSource, error) {
+	parsedSources := make([]source.ParsedSource, len(providers))
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(constants.EngineConcurrencyLimit)
 
-	for _, task := range tasks {
+	for i, provider := range providers {
 		g.Go(func() error {
 			if gCtx.Err() != nil {
 				return gCtx.Err()
 			}
-			var pSource source.ParsedSource
-			var err error
-
-			if task.isLocal {
-				pSource, err = source.ParseLocalMod(task.path)
-				if err != nil {
-					e.Config.Logger.Warn("failed to check local go.mod", "path", task.path, "error", err)
-					return nil // Skip this source on error
+			pSource, err := provider.Parse(gCtx, e.opts.GitHubHTTPClient)
+			if err != nil {
+				if e.opts.Logger != nil {
+					e.opts.Logger.Warn("failed to parse source", "name", provider.Name(), "type", provider.Type(), "error", err)
 				}
-			} else {
-				pSource, err = source.ParseGithubMod(gCtx, e.Config.GitHubHTTPClient, task.path)
-				if err != nil {
-					e.Config.Logger.Warn("failed to check github go.mod", "path", source.SanitizeURL(task.path), "error", err)
-					return nil
-				}
+				return nil // Skip this source on error
 			}
-			parsedSources[task.index] = pSource
+			parsedSources[i] = pSource
 			return nil
 		})
 	}
@@ -152,11 +167,11 @@ func (e *Engine) CheckDependencies(ctx context.Context, reqs []*modfile.Require)
 			if gCtx.Err() != nil {
 				return gCtx.Err()
 			}
-			uniqueResults[i] = e.Config.Client.Check(gCtx, uc.modPath, uc.version, e.Config.MaxProbe)
-			if e.Config.OnProgress != nil {
+			uniqueResults[i] = e.opts.Client.Check(gCtx, uc.modPath, uc.version, e.opts.MaxProbe)
+			if e.opts.OnProgress != nil {
 				// #nosec G115
 				c := completed.Add(int32(len(uc.indices)))
-				e.Config.OnProgress(int(c), len(reqs))
+				e.opts.OnProgress(int(c), len(reqs))
 			}
 			return nil
 		})
@@ -182,7 +197,7 @@ func (e *Engine) checkParsedSources(ctx context.Context, validSources []source.P
 
 	for _, ps := range validSources {
 		for _, req := range ps.Reqs {
-			if !e.Config.CheckAll && req.Indirect {
+			if !e.opts.CheckAll && req.Indirect {
 				continue
 			}
 			k := depKey{modPath: req.Mod.Path, version: req.Mod.Version}
@@ -203,16 +218,16 @@ func (e *Engine) checkParsedSources(ctx context.Context, validSources []source.P
 		return nil, err
 	}
 
-	depResults := make(map[depKey]checker.ModuleInfo)
+	depResults := make(map[depKey]checker.ModuleInfo, len(globalInfos))
 	for _, info := range globalInfos {
 		depResults[depKey{modPath: info.Current, version: info.CurrentVersion}] = info
 	}
 
-	var results []SourceResult
+	results := make([]SourceResult, 0, len(validSources))
 	for _, ps := range validSources {
-		var depInfos []DependencyInfo
+		depInfos := make([]DependencyInfo, 0, len(ps.Reqs))
 		for _, req := range ps.Reqs {
-			if !e.Config.CheckAll && req.Indirect {
+			if !e.opts.CheckAll && req.Indirect {
 				continue
 			}
 			k := depKey{modPath: req.Mod.Path, version: req.Mod.Version}
@@ -245,18 +260,15 @@ func (e *Engine) RunMultiSources(ctx context.Context, yamlCfg config.YAMLConfig)
 		return nil, fmt.Errorf("no local or github sources specified")
 	}
 
-	var tasks []checkTask
-	idx := 0
+	providers := make([]source.Provider, 0, len(yamlCfg.Local)+len(yamlCfg.Github))
 	for _, localPath := range yamlCfg.Local {
-		tasks = append(tasks, checkTask{index: idx, isLocal: true, path: localPath})
-		idx++
+		providers = append(providers, source.NewLocalProvider(localPath))
 	}
 	for _, githubPath := range yamlCfg.Github {
-		tasks = append(tasks, checkTask{index: idx, isLocal: false, path: githubPath})
-		idx++
+		providers = append(providers, source.NewGitHubProvider(githubPath))
 	}
 
-	validSources, err := e.parseAllSources(ctx, tasks)
+	validSources, err := e.parseAllProviders(ctx, providers)
 	if err != nil {
 		return nil, err
 	}
@@ -265,10 +277,11 @@ func (e *Engine) RunMultiSources(ctx context.Context, yamlCfg config.YAMLConfig)
 }
 
 func (e *Engine) RunLocalSource(ctx context.Context, path string) ([]SourceResult, error) {
-	parsed, err := source.ParseLocalMod(path)
+	provider := source.NewLocalProvider(path)
+	validSources, err := e.parseAllProviders(ctx, []source.Provider{provider})
 	if err != nil {
 		return nil, err
 	}
 
-	return e.checkParsedSources(ctx, []source.ParsedSource{parsed})
+	return e.checkParsedSources(ctx, validSources)
 }

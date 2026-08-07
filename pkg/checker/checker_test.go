@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -703,4 +704,36 @@ func BenchmarkFindLatestMajor(b *testing.B) {
 	for b.Loop() {
 		_, _, _ = client.FindLatestMajor(context.Background(), "github.com/foo/bar", 1, 5, "/")
 	}
+}
+
+func TestSafeCheckRedirect(t *testing.T) {
+	reqSameHost, _ := http.NewRequest("GET", "https://example.com/redirected", nil)
+	reqSameHost.Header.Set("Authorization", "Bearer secret")
+	viaSameHost := []*http.Request{{URL: parseTestURL(t, "https://example.com/initial")}}
+
+	if err := SafeCheckRedirect(reqSameHost, viaSameHost); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reqSameHost.Header.Get("Authorization") != "Bearer secret" {
+		t.Errorf("Authorization header should be preserved for same host")
+	}
+
+	reqDiffHost, _ := http.NewRequest("GET", "https://other.com/redirected", nil)
+	reqDiffHost.Header.Set("Authorization", "Bearer secret")
+	viaDiffHost := []*http.Request{{URL: parseTestURL(t, "https://example.com/initial")}}
+
+	if err := SafeCheckRedirect(reqDiffHost, viaDiffHost); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reqDiffHost.Header.Get("Authorization") != "" {
+		t.Errorf("Authorization header should be stripped for cross-host redirect")
+	}
+}
+
+func parseTestURL(t *testing.T, s string) *url.URL {
+	u, err := url.Parse(s)
+	if err != nil {
+		t.Fatalf("failed to parse url: %v", err)
+	}
+	return u
 }

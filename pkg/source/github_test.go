@@ -93,9 +93,6 @@ func TestGetGithubRawURLs(t *testing.T) {
 }
 
 func TestFetchGithubMod(t *testing.T) {
-	origGetGithubRawURLs := getGithubRawURLs
-	defer func() { getGithubRawURLs = origGetGithubRawURLs }()
-
 	tests := []struct {
 		name          string
 		setup         func(t *testing.T) (inputURL string, candidates []string, client *http.Client, cleanup func())
@@ -207,15 +204,12 @@ func TestFetchGithubMod(t *testing.T) {
 			inputURL, candidates, client, cleanup := tt.setup(t)
 			defer cleanup()
 
+			var resolver func(string) []string
 			if len(candidates) > 0 {
-				getGithubRawURLs = func(_ string) []string {
-					return candidates
-				}
-			} else {
-				getGithubRawURLs = origGetGithubRawURLs
+				resolver = func(_ string) []string { return candidates }
 			}
 
-			content, chosenURL, err := FetchGithubMod(context.Background(), client, inputURL)
+			content, chosenURL, err := FetchGithubModWithResolver(context.Background(), client, inputURL, resolver)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("fetchGithubMod err = %v, wantErr = %t", err, tt.wantErr)
 			}

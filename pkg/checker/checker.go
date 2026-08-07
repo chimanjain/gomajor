@@ -1,6 +1,7 @@
 package checker
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -46,10 +47,11 @@ type Client struct {
 	DisableMinor bool
 	DisableMajor bool
 
-	initOnce    sync.Once
-	latestCache sync.Map // maps modPath to latest version found
-	sfGroup     singleflight.Group
-	sem         chan struct{}
+	initOnce       sync.Once
+	latestCache    sync.Map // maps modPath to latest version found
+	sfGroup        singleflight.Group
+	sem            chan struct{}
+	privateMatcher privateModuleMatcher
 }
 
 // Option configures a Client.
@@ -89,11 +91,36 @@ func WithConcurrencyLimit(n int) Option {
 	}
 }
 
+func SafeCheckRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("stopped after 10 redirects")
+	}
+	if len(via) > 0 {
+		prev := via[len(via)-1]
+		if !strings.EqualFold(prev.URL.Hostname(), req.URL.Hostname()) {
+			req.Header.Del("Authorization")
+		}
+	}
+	return nil
+}
+
+func defaultTransport() http.RoundTripper {
+	if t, ok := http.DefaultTransport.(*http.Transport); ok {
+		cloned := t.Clone()
+		cloned.MaxIdleConns = constants.HTTPMaxIdleConns
+		cloned.MaxIdleConnsPerHost = constants.CheckerConcurrencyLimit
+		return cloned
+	}
+	return http.DefaultTransport
+}
+
 // NewClient creates a Client with default settings, then applies opts.
 func NewClient(opts ...Option) *Client {
 	c := &Client{
 		HTTPClient: &http.Client{
-			Timeout: constants.HTTPTimeout,
+			Timeout:       constants.HTTPTimeout,
+			Transport:     defaultTransport(),
+			CheckRedirect: SafeCheckRedirect,
 		},
 		ProxyBase: defaultProxy,
 		ProxyURLs: []string{defaultProxy},
@@ -126,11 +153,8 @@ func DefaultClient(opts ...Option) *Client {
 			if p == directProxy || p == offProxy {
 				containsFallback = true
 				fallbackVal = p
-			} else {
-				alreadyPresent := slices.Contains(proxyURLs, p)
-				if !alreadyPresent {
-					proxyURLs = append(proxyURLs, p)
-				}
+			} else if !slices.Contains(proxyURLs, p) {
+				proxyURLs = append(proxyURLs, p)
 			}
 		}
 	}
@@ -142,19 +166,7 @@ func DefaultClient(opts ...Option) *Client {
 		proxyURLs = []string{defaultProxy}
 	}
 
-	transport := http.DefaultTransport
-	if t, ok := http.DefaultTransport.(*http.Transport); ok {
-		cloned := t.Clone()
-		cloned.MaxIdleConns = constants.HTTPMaxIdleConns
-		cloned.MaxIdleConnsPerHost = constants.CheckerConcurrencyLimit
-		transport = cloned
-	}
-
 	c := NewClient(
-		WithHTTPClient(&http.Client{
-			Timeout:   constants.HTTPTimeout,
-			Transport: transport,
-		}),
 		WithProxyURLs(proxyURLs),
 	)
 	for _, opt := range opts {
@@ -209,20 +221,36 @@ type ModuleInfo struct {
 	HasMinorUpdate bool
 }
 
-// getPrivateGlobs reads GONOPROXY / GOPRIVATE lazily on each call so that
-// changes made after package init (e.g., t.Setenv in tests) are respected.
-func getPrivateGlobs() string {
+type privateModuleMatcher struct {
+	mu             sync.RWMutex
+	cachedRawGlobs string
+	cachedHasGlobs bool
+}
+
+func (m *privateModuleMatcher) isPrivate(modPath string) bool {
 	globs := utils.GetGoEnv("GONOPROXY")
 	if globs == "" {
 		globs = utils.GetGoEnv("GOPRIVATE")
 	}
-	return globs
-}
 
-// isPrivateModule checks if the module path matches GOPRIVATE or GONOPROXY environment variables.
-func isPrivateModule(modPath string) bool {
-	globs := getPrivateGlobs()
-	if globs == "" {
+	m.mu.RLock()
+	if globs == m.cachedRawGlobs {
+		has := m.cachedHasGlobs
+		m.mu.RUnlock()
+		if !has {
+			return false
+		}
+		return module.MatchPrefixPatterns(globs, modPath)
+	}
+	m.mu.RUnlock()
+
+	m.mu.Lock()
+	m.cachedRawGlobs = globs
+	m.cachedHasGlobs = globs != ""
+	has := m.cachedHasGlobs
+	m.mu.Unlock()
+
+	if !has {
 		return false
 	}
 	return module.MatchPrefixPatterns(globs, modPath)
@@ -237,7 +265,7 @@ func isPrivateModule(modPath string) bool {
 // without aborting the shared in-flight fetch, which is bounded by HTTPTimeout
 // and may still benefit other waiting goroutines.
 func (c *Client) latestVersion(ctx context.Context, modPath string) (string, bool) {
-	if isPrivateModule(modPath) {
+	if c.privateMatcher.isPrivate(modPath) {
 		return "", false
 	}
 
@@ -290,14 +318,9 @@ func (c *Client) fetchLatestVersion(ctx context.Context, modPath string) (string
 		return "", false
 	}
 
-	var proxyList []string
-	switch {
-	case len(c.ProxyURLs) > 0:
-		proxyList = c.ProxyURLs
-	case c.ProxyBase != "":
-		proxyList = []string{c.ProxyBase}
-	default:
-		proxyList = []string{defaultProxy}
+	proxyList := c.ProxyURLs
+	if len(proxyList) == 0 {
+		proxyList = []string{cmp.Or(c.ProxyBase, defaultProxy)}
 	}
 
 	for _, proxyURL := range proxyList {
@@ -319,10 +342,7 @@ func (c *Client) fetchFromProxy(ctx context.Context, proxyURL, escaped string) (
 	b := backoff.NewExponentialBackOff()
 	b.InitialInterval = constants.HTTPRetryInitialDelay
 
-	maxTries := uint(constants.HTTPMaxRetries)
-	if maxTries == 0 {
-		maxTries = 1
-	}
+	maxTries := max(uint(constants.HTTPMaxRetries), 1)
 
 	baseReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -340,14 +360,10 @@ func (c *Client) fetchFromProxy(ctx context.Context, proxyURL, escaped string) (
 
 		if resp.StatusCode == http.StatusOK {
 			limitReader := io.LimitReader(resp.Body, constants.ProxyResponseMaxBytes)
-			data, err := io.ReadAll(limitReader)
-			if err != nil {
-				return "", backoff.Permanent(fmt.Errorf("read body: %w", err))
-			}
 			var info struct {
 				Version string `json:"Version"`
 			}
-			if err := json.Unmarshal(data, &info); err != nil || info.Version == "" {
+			if err := json.NewDecoder(limitReader).Decode(&info); err != nil || info.Version == "" {
 				return "", backoff.Permanent(fmt.Errorf("invalid json: %w", err))
 			}
 			return info.Version, nil
@@ -450,56 +466,30 @@ func (c *Client) Check(ctx context.Context, modPath, modVersion string, maxProbe
 		Separator:      sep,
 	}
 
-	// Use local variables per goroutine to avoid data races on the shared
-	// info struct. Results are merged into info only after wg.Wait().
+	// Each goroutine writes to a disjoint set of info fields, so direct
+	// assignment is safe — no intermediary variables needed.
 	var wg sync.WaitGroup
-
-	var (
-		latestMajor     int
-		latestMajorPath string
-		latestMajorVer  string
-		hasMajorUpdate  bool
-	)
 
 	if !c.DisableMajor {
 		wg.Go(func() {
-			lm, lp, lv := c.FindLatestMajor(ctx, basePath, currentMajor, maxProbe, sep)
-			latestMajor = lm
-			latestMajorPath = lp
-			latestMajorVer = lv
-			hasMajorUpdate = lm > currentMajor
+			info.LatestMajor, info.LatestMajorPath, info.LatestMajorVersion = c.FindLatestMajor(ctx, basePath, currentMajor, maxProbe, sep)
+			info.HasUpdate = info.LatestMajor > currentMajor
 		})
 	} else {
-		latestMajor = currentMajor
-		latestMajorPath = modPath
+		info.LatestMajor = currentMajor
+		info.LatestMajorPath = modPath
 	}
 
-	var latestMinor string
-	var hasMinorUpdate bool
 	if !c.DisableMinor {
 		wg.Go(func() {
-			lm, ok := c.latestVersion(ctx, modPath)
-			if ok && lm != "" && semver.Compare(lm, modVersion) > 0 {
-				latestMinor = lm
-				hasMinorUpdate = true
+			if lm, ok := c.latestVersion(ctx, modPath); ok && lm != "" && semver.Compare(lm, modVersion) > 0 {
+				info.LatestMinorVersion = lm
+				info.HasMinorUpdate = true
 			}
 		})
 	}
 
 	wg.Wait()
-
-	// Merge goroutine results into info after all goroutines have finished.
-	if !c.DisableMajor {
-		info.LatestMajor = latestMajor
-		info.LatestMajorPath = latestMajorPath
-		info.LatestMajorVersion = latestMajorVer
-		info.HasUpdate = hasMajorUpdate
-	} else {
-		info.LatestMajor = currentMajor
-		info.LatestMajorPath = modPath
-	}
-	info.LatestMinorVersion = latestMinor
-	info.HasMinorUpdate = hasMinorUpdate
 
 	return info
 }

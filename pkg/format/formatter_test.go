@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -124,5 +126,25 @@ func TestPrintMultiJsonResults(t *testing.T) {
 
 	if len(output.Results) != 1 || output.Results[0].Source != "test-source" {
 		t.Errorf("unexpected output struct: %+v", output)
+	}
+}
+
+func TestWriteReport_Symlink(t *testing.T) {
+	tmpDir := t.TempDir()
+	targetFile := filepath.Join(tmpDir, "target.json")
+	if err := os.WriteFile(targetFile, []byte("target"), 0o600); err != nil {
+		t.Fatalf("failed to create target file: %v", err)
+	}
+
+	symlinkPath := filepath.Join(tmpDir, "symlink.json")
+	if err := os.Symlink(targetFile, symlinkPath); err != nil {
+		t.Fatalf("failed to create symlink: %v", err)
+	}
+
+	err := WriteReport(io.Discard, symlinkPath, true, nil)
+	if err == nil {
+		t.Error("WriteReport should fail when target is a symlink")
+	} else if !strings.Contains(err.Error(), "refusing to write report to symlink") {
+		t.Errorf("unexpected error message: %v", err)
 	}
 }

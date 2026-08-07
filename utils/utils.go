@@ -2,6 +2,7 @@ package utils
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -14,7 +15,22 @@ var (
 	execGoEnv  = execCommandGoEnv
 )
 
+func isValidGoEnvKey(key string) bool {
+	if len(key) == 0 {
+		return false
+	}
+	for _, r := range key {
+		if (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
 func execCommandGoEnv(key string) (string, error) {
+	if !isValidGoEnvKey(key) {
+		return "", fmt.Errorf("invalid go env key: %q", key)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "go", "env", key)
@@ -48,16 +64,11 @@ func GetGoEnv(key string) string {
 
 // ClearGoEnvCache clears the cached go env lookups.
 func ClearGoEnvCache() {
-	goEnvCache.Range(func(key, _ any) bool {
-		goEnvCache.Delete(key)
-		return true
-	})
+	goEnvCache.Clear()
 }
 
 // NormalizeSplitString splits a string by comma, space, tab, or newline, and
 // trims whitespace from each resulting element.
 func NormalizeSplitString(p string) []string {
-	return strings.FieldsFunc(p, func(r rune) bool {
-		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
-	})
+	return strings.FieldsFunc(p, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r' })
 }

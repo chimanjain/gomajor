@@ -76,6 +76,20 @@ func TestRootCmd(t *testing.T) {
 			},
 		},
 		{
+			name:      "Flags_MaxProbe_Capped",
+			args:      []string{"-m", "999"},
+			parseOnly: true,
+			checkFn: func(t *testing.T, cmd *cobra.Command, _ string) {
+				cfg, _, err := parseConfig(cmd)
+				if err != nil {
+					t.Fatalf("parseConfig: %v", err)
+				}
+				if cfg.MaxProbe != 50 {
+					t.Errorf("MaxProbe = %v, want 50 (capped)", cfg.MaxProbe)
+				}
+			},
+		},
+		{
 			name:      "Flags_Github_SingleRepo",
 			args:      []string{"-g", "owner/repo"},
 			parseOnly: true,
@@ -109,8 +123,9 @@ func TestRootCmd(t *testing.T) {
 			name: "Version",
 			args: []string{"--version"},
 			checkFn: func(t *testing.T, _ *cobra.Command, got string) {
-				if got != "v1.8.0\n" {
-					t.Errorf("got %q, want v1.8.0\n", got)
+				want := Version + "\n"
+				if got != want {
+					t.Errorf("got %q, want %q", got, want)
 				}
 			},
 		},

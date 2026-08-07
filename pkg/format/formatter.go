@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -21,25 +22,26 @@ type YAMLOutput struct {
 }
 
 func WriteReport(w io.Writer, outputPath string, isJSON bool, results []engine.SourceResult) error {
-	outputData := YAMLOutput{Results: results}
-	var data []byte
-	var err error
-	formatName := "YAML"
+	cleanPath := filepath.Clean(outputPath)
+	if fi, err := os.Lstat(cleanPath); err == nil && (fi.Mode()&os.ModeSymlink != 0) {
+		return fmt.Errorf("refusing to write report to symlink: %s", cleanPath)
+	}
 
+	outputData := YAMLOutput{Results: results}
+	formatName := "YAML"
+	data, err := yaml.Marshal(outputData)
 	if isJSON {
 		formatName = "JSON"
 		data, err = json.MarshalIndent(outputData, "", "  ")
-	} else {
-		data, err = yaml.Marshal(outputData)
 	}
 
 	if err == nil {
-		err = os.WriteFile(outputPath, data, 0o600)
+		err = os.WriteFile(cleanPath, data, 0o600)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to write %s output: %w", formatName, err)
 	}
-	fmt.Fprintf(w, "Results written to %s file: %s\n", formatName, outputPath)
+	fmt.Fprintf(w, "Results written to %s file: %s\n", formatName, cleanPath)
 	return nil
 }
 
@@ -89,30 +91,30 @@ func visualLen(s string) int {
 	return count
 }
 
-var spaces = []byte("                                                                                                                                                                                                        ")
+const spacesStr = "                                                                                                                                                                                                        "
 
-func pad(s string, w int) string {
-	vlen := visualLen(s)
+func padWithLen(s string, vlen, w int) string {
 	if vlen >= w {
 		return s
 	}
 	need := w - vlen
-	if need <= len(spaces) {
-		return s + string(spaces[:need])
+	if need <= len(spacesStr) {
+		return s + spacesStr[:need]
 	}
 	return s + strings.Repeat(" ", need)
 }
 
+func pad(s string, w int) string {
+	return padWithLen(s, visualLen(s), w)
+}
+
 func formatRow(mod, current, minorVer string, hasMinor bool, majorVer, majorPath string, hasMajor bool) []string {
-	minor := "-"
+	minor, major, newPath := "-", "-", "-"
 	if hasMinor {
 		minor = color.GreenString(minorVer)
 	}
-	major := "-"
-	newPath := "-"
 	if hasMajor {
-		major = color.YellowString(majorVer)
-		newPath = color.HiBlackString(majorPath)
+		major, newPath = color.YellowString(majorVer), color.HiBlackString(majorPath)
 	}
 	return []string{color.CyanString(mod), current, minor, major, newPath}
 }
@@ -122,11 +124,20 @@ func printTable(w io.Writer, indent string, rows [][]string) {
 		return
 	}
 	header := []string{"MODULE", "CURRENT", "MINOR", "MAJOR", "NEW PATH"}
+	headerLens := [4]int{
+		visualLen(header[0]),
+		visualLen(header[1]),
+		visualLen(header[2]),
+		visualLen(header[3]),
+	}
+
+	rowLens := make([][4]int, len(rows))
 	widths := make([]int, 5)
 	for col := range 4 {
-		maxW := visualLen(header[col])
-		for _, row := range rows {
+		maxW := headerLens[col]
+		for i, row := range rows {
 			wCol := visualLen(row[col])
+			rowLens[i][col] = wCol
 			if wCol > maxW {
 				maxW = wCol
 			}
@@ -138,21 +149,21 @@ func printTable(w io.Writer, indent string, rows [][]string) {
 	_, _ = fmt.Fprintf(
 		w, "%s%s%s%s%s%s\n",
 		indent,
-		headerColor(pad(header[0], widths[0])),
-		headerColor(pad(header[1], widths[1])),
-		headerColor(pad(header[2], widths[2])),
-		headerColor(pad(header[3], widths[3])),
+		headerColor(padWithLen(header[0], headerLens[0], widths[0])),
+		headerColor(padWithLen(header[1], headerLens[1], widths[1])),
+		headerColor(padWithLen(header[2], headerLens[2], widths[2])),
+		headerColor(padWithLen(header[3], headerLens[3], widths[3])),
 		headerColor(header[4]),
 	)
 
-	for _, row := range rows {
+	for i, row := range rows {
 		_, _ = fmt.Fprintf(
 			w, "%s%s%s%s%s%s\n",
 			indent,
-			pad(row[0], widths[0]),
-			pad(row[1], widths[1]),
-			pad(row[2], widths[2]),
-			pad(row[3], widths[3]),
+			padWithLen(row[0], rowLens[i][0], widths[0]),
+			padWithLen(row[1], rowLens[i][1], widths[1]),
+			padWithLen(row[2], rowLens[i][2], widths[2]),
+			padWithLen(row[3], rowLens[i][3], widths[3]),
 			row[4],
 		)
 	}
@@ -214,9 +225,9 @@ func PrintAnalysisHeader(w io.Writer, count int, checkAll bool, path string) {
 	if w == nil {
 		return
 	}
-	msg := fmt.Sprintf("Analyzing %d direct dependencies", count)
+	scope := "direct dependencies"
 	if checkAll {
-		msg = fmt.Sprintf("Analyzing %d dependencies (direct and indirect)", count)
+		scope = "dependencies (direct and indirect)"
 	}
-	_, _ = fmt.Fprintf(w, "%s from %s...\n\n", color.HiCyanString(msg), color.HiBlackString(path))
+	_, _ = fmt.Fprintf(w, "%s from %s...\n\n", color.HiCyanString(fmt.Sprintf("Analyzing %d %s", count, scope)), color.HiBlackString(path))
 }
