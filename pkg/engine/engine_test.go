@@ -207,3 +207,17 @@ func TestRunMultiSources_Empty(t *testing.T) {
 		t.Error("Expected error for empty sources, got nil")
 	}
 }
+
+func TestNewWithOptions(t *testing.T) {
+	opts := Options{
+		MaxProbe: 3,
+		CheckAll: true,
+	}
+	eng := NewWithOptions(opts)
+	if eng.opts.MaxProbe != 3 {
+		t.Errorf("eng.opts.MaxProbe = %d, want 3", eng.opts.MaxProbe)
+	}
+	if eng.opts.Client == nil {
+		t.Error("eng.opts.Client should be initialized with default client")
+	}
+}

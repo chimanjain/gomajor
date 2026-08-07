@@ -51,17 +51,13 @@ func runCheckerWithConfig(ctx context.Context, cfg *config.Config, yamlCfg confi
 	eng := engine.New(cfg)
 	var results []engine.SourceResult
 	var err error
-
-	if !singleMode {
-		results, err = eng.RunMultiSources(ctx, yamlCfg)
-		if err != nil {
-			return err
-		}
-	} else {
+	if singleMode {
 		results, err = executeSingleSource(ctx, eng, cfg)
-		if err != nil {
-			return err
-		}
+	} else {
+		results, err = eng.RunMultiSources(ctx, yamlCfg)
+	}
+	if err != nil {
+		return err
 	}
 
 	return writeOutput(cfg, results, singleMode)

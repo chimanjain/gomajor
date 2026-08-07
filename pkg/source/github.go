@@ -14,7 +14,7 @@ import (
 )
 
 // getGithubRawURLs normalizes a GitHub path or URL into candidate raw URL(s).
-var getGithubRawURLs = func(input string) []string {
+func getGithubRawURLs(input string) []string {
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return nil
@@ -65,20 +65,42 @@ var getGithubRawURLs = func(input string) []string {
 	return []string{input}
 }
 
-// FetchGithubMod retrieves a go.mod from a GitHub repository or URL.
+// parseGithubModWithResolver parses GitHub mod content using a custom URL resolver function.
+func parseGithubModWithResolver(ctx context.Context, httpClient *http.Client, pathOrURL string, resolver func(string) []string) (ParsedSource, error) {
+	content, resolvedURL, err := FetchGithubModWithResolver(ctx, httpClient, pathOrURL, resolver)
+	if err != nil {
+		return ParsedSource{}, err
+	}
+	return parseModContent(resolvedURL, GitHub, content)
+}
+
+// FetchGithubMod retrieves a go.mod from a GitHub repository or URL using default URL resolution.
 func FetchGithubMod(ctx context.Context, client *http.Client, pathOrURL string) ([]byte, string, error) {
-	urls := getGithubRawURLs(pathOrURL)
+	return FetchGithubModWithResolver(ctx, client, pathOrURL, getGithubRawURLs)
+}
+
+// FetchGithubModWithResolver retrieves a go.mod using a specified URL resolver.
+func FetchGithubModWithResolver(ctx context.Context, client *http.Client, pathOrURL string, resolver func(string) []string) ([]byte, string, error) {
+	if resolver == nil {
+		resolver = getGithubRawURLs
+	}
+	urls := resolver(pathOrURL)
 	if len(urls) == 0 {
 		return nil, "", fmt.Errorf("invalid github repository format: %s", pathOrURL)
 	}
 
-	token := resolveGithubToken(pathOrURL)
+	var parsedURL *url.URL
+	if strings.Contains(pathOrURL, "://") {
+		parsedURL, _ = url.Parse(pathOrURL)
+	}
+
+	token := resolveGithubToken(parsedURL)
 	// tokenSourceHost is non-empty only when the token was embedded in the URL
 	// user-info field. In that case we restrict the token to requests targeting
 	// the same host, preventing accidental credential leakage to other servers.
 	// Env-var tokens (tokenSourceHost == "") are forwarded to all candidates
 	// because the user deliberately set them as global credentials.
-	tokenSourceHost := resolveTokenHost(pathOrURL)
+	tokenSourceHost := resolveTokenHost(parsedURL)
 
 	var lastErr error
 	for _, u := range urls {
@@ -96,35 +118,30 @@ func FetchGithubMod(ctx context.Context, client *http.Client, pathOrURL string) 
 	for i, u := range urls {
 		sanitizedUrls[i] = SanitizeURL(u)
 	}
-
-	return nil, "", fmt.Errorf("failed to fetch go.mod from candidates %v: %w", sanitizedUrls, lastErr)
+	// lastErr is always non-nil here: len(urls) > 0 and every attempt failed.
+	return nil, "", fmt.Errorf("failed to fetch go.mod from candidates %v: %s", sanitizedUrls, SanitizeURL(lastErr.Error()))
 }
 
 // resolveGithubToken extracts a token from the URL user-info field, falling
 // back to the GITHUB_TOKEN and GITHUB_PAT environment variables.
-func resolveGithubToken(pathOrURL string) string {
-	var token string
-	if u, err := url.Parse(pathOrURL); err == nil && u.User != nil {
+func resolveGithubToken(u *url.URL) string {
+	if u != nil && u.User != nil {
 		if passwd, ok := u.User.Password(); ok {
-			token = passwd
-		} else {
-			token = u.User.Username()
+			return passwd
 		}
+		return u.User.Username()
 	}
-	if token == "" {
-		token = utils.GetGoEnv("GITHUB_TOKEN")
+	if t := utils.GetGoEnv("GITHUB_TOKEN"); t != "" {
+		return t
 	}
-	if token == "" {
-		token = utils.GetGoEnv("GITHUB_PAT")
-	}
-	return token
+	return utils.GetGoEnv("GITHUB_PAT")
 }
 
 // resolveTokenHost returns the hostname that a URL-embedded token was scoped to.
 // If the token came from an environment variable (no user-info in the URL) an
 // empty string is returned, which hostMatches treats as "match any github host".
-func resolveTokenHost(pathOrURL string) string {
-	if u, err := url.Parse(pathOrURL); err == nil && u.User != nil && u.Host != "" {
+func resolveTokenHost(u *url.URL) string {
+	if u != nil && u.User != nil && u.Host != "" {
 		return u.Hostname()
 	}
 	return ""
@@ -133,20 +150,14 @@ func resolveTokenHost(pathOrURL string) string {
 // urlHostMatches reports whether targetURL's hostname equals wantHost.
 func urlHostMatches(targetURL, wantHost string) bool {
 	u, err := url.Parse(targetURL)
-	if err != nil {
-		return false
-	}
-	return u.Hostname() == wantHost
+	return err == nil && u.Hostname() == wantHost
 }
 
 func fetchSingleURL(ctx context.Context, client *http.Client, u string, sendToken bool, token string) ([]byte, error) {
 	b := backoff.NewExponentialBackOff()
 	b.InitialInterval = constants.HTTPRetryInitialDelay
 
-	maxTries := uint(constants.HTTPMaxRetries)
-	if maxTries == 0 {
-		maxTries = 1
-	}
+	maxTries := max(uint(constants.HTTPMaxRetries), 1)
 
 	operation := func() ([]byte, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -169,16 +180,14 @@ func fetchSingleURL(ctx context.Context, client *http.Client, u string, sendToke
 		defer resp.Body.Close()
 
 		if resp.StatusCode == http.StatusOK {
-			limitReader := io.LimitReader(resp.Body, constants.GitHubModMaxBytes)
-			return io.ReadAll(limitReader)
+			return io.ReadAll(io.LimitReader(resp.Body, constants.GitHubModMaxBytes))
 		}
 
-		retryable := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
-		if !retryable {
-			return nil, backoff.Permanent(fmt.Errorf("HTTP status %d: %s", resp.StatusCode, resp.Status))
+		errStatus := fmt.Errorf("HTTP status %d: %s", resp.StatusCode, resp.Status)
+		if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode < 500 {
+			return nil, backoff.Permanent(errStatus)
 		}
-
-		return nil, fmt.Errorf("HTTP status %d: %s", resp.StatusCode, resp.Status)
+		return nil, errStatus
 	}
 
 	return backoff.Retry(ctx, operation, backoff.WithBackOff(b), backoff.WithMaxTries(maxTries))

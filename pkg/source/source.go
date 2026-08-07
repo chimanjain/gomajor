@@ -28,6 +28,49 @@ type ParsedSource struct {
 	Reqs       []*modfile.Require
 }
 
+// Provider defines the interface for fetching and parsing a go.mod source.
+type Provider interface {
+	Name() string
+	Type() Type
+	Parse(ctx context.Context, httpClient *http.Client) (ParsedSource, error)
+}
+
+// LocalProvider implements Provider for local go.mod files.
+type LocalProvider struct {
+	Path string
+}
+
+// NewLocalProvider returns a new LocalProvider for the given file path.
+func NewLocalProvider(path string) LocalProvider {
+	return LocalProvider{Path: path}
+}
+
+func (p LocalProvider) Name() string { return p.Path }
+func (p LocalProvider) Type() Type   { return Local }
+func (p LocalProvider) Parse(_ context.Context, _ *http.Client) (ParsedSource, error) {
+	return ParseLocalMod(p.Path)
+}
+
+// GitHubProvider implements Provider for GitHub repositories.
+type GitHubProvider struct {
+	PathOrURL   string
+	URLResolver func(string) []string
+}
+
+// NewGitHubProvider returns a new GitHubProvider for the given path or URL.
+func NewGitHubProvider(pathOrURL string) GitHubProvider {
+	return GitHubProvider{PathOrURL: pathOrURL}
+}
+
+func (p GitHubProvider) Name() string { return SanitizeURL(p.PathOrURL) }
+func (p GitHubProvider) Type() Type   { return GitHub }
+func (p GitHubProvider) Parse(ctx context.Context, httpClient *http.Client) (ParsedSource, error) {
+	if p.URLResolver != nil {
+		return parseGithubModWithResolver(ctx, httpClient, p.PathOrURL, p.URLResolver)
+	}
+	return ParseGithubMod(ctx, httpClient, p.PathOrURL)
+}
+
 // ParseLocalMod reads and parses a local go.mod file.
 func ParseLocalMod(path string) (ParsedSource, error) {
 	content, err := os.ReadFile(path)
@@ -101,9 +144,10 @@ func SanitizeURL(raw string) string {
 func isSensitiveParam(key string) bool {
 	lower := strings.ToLower(key)
 	switch lower {
-	case "token", "access_token", "secret", "password", "auth",
-		"key", "api_key", "apikey", "pat", "private_token":
+	case "key", "api_key", "apikey", "pat", "pass", "pwd", "bearer":
 		return true
 	}
-	return false
+	return strings.Contains(lower, "token") || strings.Contains(lower, "secret") ||
+		strings.Contains(lower, "password") || strings.Contains(lower, "auth") ||
+		strings.Contains(lower, "credential")
 }

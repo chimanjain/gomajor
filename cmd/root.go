@@ -11,6 +11,7 @@ import (
 
 	"github.com/chimanjain/gomajor/pkg/checker"
 	"github.com/chimanjain/gomajor/pkg/config"
+	"github.com/chimanjain/gomajor/pkg/constants"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -108,6 +109,11 @@ func parseConfig(cmd *cobra.Command) (*config.Config, config.YAMLConfig, error) 
 	cfg := config.DefaultConfig()
 	cfg.ModFilePath = v.GetString("file")
 	cfg.MaxProbe = v.GetInt("max-probe")
+	if cfg.MaxProbe > constants.MaxAllowedMaxProbe {
+		cfg.MaxProbe = constants.MaxAllowedMaxProbe
+	} else if cfg.MaxProbe < 1 {
+		cfg.MaxProbe = constants.DefaultMaxProbe
+	}
 	cfg.CheckAll = v.GetBool("all")
 	cfg.JSONOutput = v.GetBool("json")
 	cfg.NoColor = v.GetBool("no-color")

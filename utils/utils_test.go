@@ -93,3 +93,19 @@ func TestGetGoEnv(t *testing.T) {
 		}
 	})
 }
+
+func TestIsValidGoEnvKey(t *testing.T) {
+	validKeys := []string{"GOPROXY", "GONOPROXY", "GOPRIVATE", "GITHUB_TOKEN", "FOO_BAR_123"}
+	for _, k := range validKeys {
+		if !isValidGoEnvKey(k) {
+			t.Errorf("isValidGoEnvKey(%q) = false, want true", k)
+		}
+	}
+
+	invalidKeys := []string{"", "-json", "--help", "FOO-BAR", "FOO;BAR", "FOO|BAR", "FOO BAR"}
+	for _, k := range invalidKeys {
+		if isValidGoEnvKey(k) {
+			t.Errorf("isValidGoEnvKey(%q) = true, want false", k)
+		}
+	}
+}
