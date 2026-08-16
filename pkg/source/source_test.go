@@ -4,6 +4,11 @@ import (
 	"testing"
 )
 
+var (
+	_ Provider = LocalProvider{}
+	_ Provider = GitHubProvider{}
+)
+
 func TestSanitizeURL(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -55,6 +60,26 @@ func TestSanitizeURL(t *testing.T) {
 			input:    "https://github.com/owner/repo?my_secret_token=abc&auth_code=123&user_credential=xyz",
 			expected: "https://github.com/owner/repo?auth_code=REDACTED&my_secret_token=REDACTED&user_credential=REDACTED",
 		},
+		{
+			name:     "ExtraSensitiveQueryParams",
+			input:    "https://github.com/owner/repo?jwt=token123&sig=mysig&session=sess456",
+			expected: "https://github.com/owner/repo?jwt=REDACTED&session=REDACTED&sig=REDACTED",
+		},
+		{
+			name:     "ErrorMessageWithEmbeddedCredentials",
+			input:    "failed to fetch from candidates [https://token:secret@github.com]: Get \"https://token:secret@github.com\": 404",
+			expected: "failed to fetch from candidates [https://redacted@github.com]: Get \"https://redacted@github.com\": 404",
+		},
+		{
+			name:     "SchemelessCredentials",
+			input:    "user:password@github.com/owner/repo",
+			expected: "redacted@github.com/owner/repo",
+		},
+		{
+			name:     "EmptyString",
+			input:    "",
+			expected: "",
+		},
 	}
 
 	for _, tt := range tests {
@@ -66,11 +91,6 @@ func TestSanitizeURL(t *testing.T) {
 		})
 	}
 }
-
-var (
-	_ Provider = LocalProvider{}
-	_ Provider = GitHubProvider{}
-)
 
 func TestProviders(t *testing.T) {
 	t.Run("LocalProvider", func(t *testing.T) {

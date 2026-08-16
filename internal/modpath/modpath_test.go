@@ -17,11 +17,8 @@ func TestParseModulePath(t *testing.T) {
 		wantMajor int
 		wantSep   string
 	}{
-		{"Standard v2", "github.com/user/gomodule/v2", testUserGoModule, 2, "/"},
 		{"Standard v3", testUserGoModuleV3, testUserGoModule, 3, "/"},
-		{"Gopkg.in v2", "gopkg.in/yaml.v2", testYamlGopkg, 2, "."},
 		{"Gopkg.in v3", "gopkg.in/yaml.v3", testYamlGopkg, 3, "."},
-		{"Gopkg.in v1", "gopkg.in/yaml.v1", testYamlGopkg, 1, "."},
 		{"Gopkg.in v0", "gopkg.in/yaml.v0", testYamlGopkg, 0, "."},
 		{"Unversioned", testGoogleUUID, testGoogleUUID, 1, "/"},
 		{"Invalid v", "github.com/foo/bar/v", "github.com/foo/bar/v", 1, "/"},

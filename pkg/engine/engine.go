@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync/atomic"
 
 	"github.com/chimanjain/gomajor/pkg/checker"
 	"github.com/chimanjain/gomajor/pkg/config"
 	"github.com/chimanjain/gomajor/pkg/constants"
+	"github.com/chimanjain/gomajor/pkg/model"
 	"github.com/chimanjain/gomajor/pkg/source"
-	"github.com/chimanjain/gomajor/utils"
 	"golang.org/x/mod/modfile"
 	"golang.org/x/sync/errgroup"
 )
@@ -29,23 +30,13 @@ type Engine struct {
 	opts Options
 }
 
-// New creates an Engine from a Config for backward compatibility.
-func New(cfg *config.Config) *Engine {
-	if cfg == nil {
-		cfg = config.DefaultConfig()
-	}
-	return NewWithOptions(Options{
-		Client:           cfg.Client,
-		GitHubHTTPClient: cfg.GitHubHTTPClient,
-		MaxProbe:         cfg.MaxProbe,
-		CheckAll:         cfg.CheckAll,
-		Logger:           cfg.Logger,
-		OnProgress:       cfg.OnProgress,
-	})
+type depKey struct {
+	modPath string
+	version string
 }
 
-// NewWithOptions creates an Engine using explicit Options.
-func NewWithOptions(opts Options) *Engine {
+// New creates an Engine using Options.
+func New(opts Options) *Engine {
 	if opts.Client == nil {
 		opts.Client = checker.DefaultClient()
 	}
@@ -56,32 +47,9 @@ func NewWithOptions(opts Options) *Engine {
 	return &Engine{opts: opts}
 }
 
-// deduplicateStrings returns in with duplicates removed, preserving order.
-func deduplicateStrings(in []string) []string {
-	seen := make(map[string]bool, len(in))
-	out := make([]string, 0, len(in))
-	for _, s := range in {
-		if !seen[s] {
-			seen[s] = true
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-// normalizeSources deduplicates and normalises both local paths and GitHub repo
-// strings in yamlCfg. GitHub entries support comma/space/tab separation, so
-// each entry is split before deduplication.
-// This is the single authoritative deduplication point for all source types;
-// callers (e.g. cmd/runner.go) should pass raw values and rely on this function.
-func normalizeSources(yamlCfg *config.YAMLConfig) {
-	yamlCfg.Local = deduplicateStrings(yamlCfg.Local)
-
-	var githubParts []string
-	for _, p := range yamlCfg.Github {
-		githubParts = append(githubParts, utils.NormalizeSplitString(p)...)
-	}
-	yamlCfg.Github = deduplicateStrings(githubParts)
+// NewWithOptions creates an Engine using explicit Options.
+func NewWithOptions(opts Options) *Engine {
+	return New(opts)
 }
 
 func (e *Engine) parseAllProviders(ctx context.Context, providers []source.Provider) ([]source.ParsedSource, error) {
@@ -117,11 +85,6 @@ func (e *Engine) parseAllProviders(ctx context.Context, providers []source.Provi
 		}
 	}
 	return validSources, nil
-}
-
-type depKey struct {
-	modPath string
-	version string
 }
 
 func (e *Engine) CheckDependencies(ctx context.Context, reqs []*modfile.Require) ([]checker.ModuleInfo, error) {
@@ -191,7 +154,7 @@ func (e *Engine) CheckDependencies(ctx context.Context, reqs []*modfile.Require)
 	return orderedResults, nil
 }
 
-func (e *Engine) checkParsedSources(ctx context.Context, validSources []source.ParsedSource) ([]SourceResult, error) {
+func (e *Engine) checkParsedSources(ctx context.Context, validSources []source.ParsedSource) ([]model.SourceResult, error) {
 	uniqueDeps := make(map[depKey]*modfile.Require)
 	var depKeys []depKey
 
@@ -223,16 +186,16 @@ func (e *Engine) checkParsedSources(ctx context.Context, validSources []source.P
 		depResults[depKey{modPath: info.Current, version: info.CurrentVersion}] = info
 	}
 
-	results := make([]SourceResult, 0, len(validSources))
+	results := make([]model.SourceResult, 0, len(validSources))
 	for _, ps := range validSources {
-		depInfos := make([]DependencyInfo, 0, len(ps.Reqs))
+		depInfos := make([]model.DependencyInfo, 0, len(ps.Reqs))
 		for _, req := range ps.Reqs {
 			if !e.opts.CheckAll && req.Indirect {
 				continue
 			}
 			k := depKey{modPath: req.Mod.Path, version: req.Mod.Version}
 			if info, exists := depResults[k]; exists {
-				depInfos = append(depInfos, DependencyInfo{
+				depInfos = append(depInfos, model.DependencyInfo{
 					Module:             info.Current,
 					CurrentVersion:     info.CurrentVersion,
 					LatestMajorVersion: info.LatestMajorVersion,
@@ -240,10 +203,11 @@ func (e *Engine) checkParsedSources(ctx context.Context, validSources []source.P
 					HasUpdate:          info.HasUpdate,
 					LatestMinorVersion: info.LatestMinorVersion,
 					HasMinorUpdate:     info.HasMinorUpdate,
+					BasePath:           info.BasePath,
 				})
 			}
 		}
-		results = append(results, SourceResult{
+		results = append(results, model.SourceResult{
 			Source:       ps.Source,
 			SourceType:   ps.SourceType,
 			Dependencies: depInfos,
@@ -253,7 +217,7 @@ func (e *Engine) checkParsedSources(ctx context.Context, validSources []source.P
 	return results, nil
 }
 
-func (e *Engine) RunMultiSources(ctx context.Context, yamlCfg config.YAMLConfig) ([]SourceResult, error) {
+func (e *Engine) RunMultiSources(ctx context.Context, yamlCfg config.YAMLConfig) ([]model.SourceResult, error) {
 	normalizeSources(&yamlCfg)
 
 	if len(yamlCfg.Local) == 0 && len(yamlCfg.Github) == 0 {
@@ -276,7 +240,7 @@ func (e *Engine) RunMultiSources(ctx context.Context, yamlCfg config.YAMLConfig)
 	return e.checkParsedSources(ctx, validSources)
 }
 
-func (e *Engine) RunLocalSource(ctx context.Context, path string) ([]SourceResult, error) {
+func (e *Engine) RunLocalSource(ctx context.Context, path string) ([]model.SourceResult, error) {
 	provider := source.NewLocalProvider(path)
 	validSources, err := e.parseAllProviders(ctx, []source.Provider{provider})
 	if err != nil {
@@ -284,4 +248,35 @@ func (e *Engine) RunLocalSource(ctx context.Context, path string) ([]SourceResul
 	}
 
 	return e.checkParsedSources(ctx, validSources)
+}
+
+// deduplicateStrings returns in with duplicates removed, preserving order.
+func deduplicateStrings(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// normalizeSources deduplicates and normalises both local paths and GitHub repo
+// strings in yamlCfg. GitHub entries support comma/space/tab separation, so
+// each entry is split before deduplication.
+// This is the single authoritative deduplication point for all source types;
+// callers (e.g. cmd/runner.go) should pass raw values and rely on this function.
+func normalizeSources(yamlCfg *config.YAMLConfig) {
+	yamlCfg.Local = deduplicateStrings(yamlCfg.Local)
+
+	var githubParts []string
+	for _, p := range yamlCfg.Github {
+		parts := strings.FieldsFunc(p, func(r rune) bool {
+			return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+		})
+		githubParts = append(githubParts, parts...)
+	}
+	yamlCfg.Github = deduplicateStrings(githubParts)
 }

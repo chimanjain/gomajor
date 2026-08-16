@@ -1,16 +1,10 @@
 package config
 
 import (
-	"io"
-	"log/slog"
-	"net/http"
-	"os"
-
-	"github.com/chimanjain/gomajor/pkg/checker"
 	"github.com/chimanjain/gomajor/pkg/constants"
 )
 
-// Config holds the configuration for the checker command.
+// Config holds the configuration options for the checker command.
 type Config struct {
 	ModFilePath string
 	MaxProbe    int
@@ -20,20 +14,9 @@ type Config struct {
 	Minor       bool
 	Major       bool
 	Verbose     bool
-	// Client is the module-version checker. Accepts any implementation of
-	// checker.ModChecker, making it easy to inject a test double.
-	Client checker.ModChecker
-	// GitHubHTTPClient is the HTTP client used to fetch remote go.mod files
-	// from GitHub. Kept separate from Client so the checker interface stays
-	// focused on version-querying concerns.
-	GitHubHTTPClient *http.Client
-	ConfigPath       string
-	OutputPath       string
-	GitHubRepos      []string
-	Out              io.Writer
-	Err              io.Writer
-	Logger           *slog.Logger
-	OnProgress       func(completed, total int)
+	ConfigPath  string
+	OutputPath  string
+	GitHubRepos []string
 }
 
 // YAMLConfig defines the structure for the configuration YAML file.
@@ -45,10 +28,7 @@ type YAMLConfig struct {
 	Major  *bool    `yaml:"major,omitempty" mapstructure:"major"`
 }
 
-// DefaultConfig returns a config with standard settings.
-// Client and GitHubHTTPClient are left nil; the caller is responsible for
-// constructing them with the desired options (e.g. minor/major flags) to
-// avoid creating a client that is immediately discarded and replaced.
+// DefaultConfig returns a config with standard default settings.
 func DefaultConfig() *Config {
 	return &Config{
 		ModFilePath: "",
@@ -62,8 +42,5 @@ func DefaultConfig() *Config {
 		ConfigPath:  "",
 		OutputPath:  "",
 		GitHubRepos: nil,
-		Out:         os.Stdout,
-		Err:         os.Stderr,
-		Logger:      slog.New(slog.NewTextHandler(os.Stderr, nil)),
 	}
 }

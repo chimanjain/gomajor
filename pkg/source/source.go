@@ -6,13 +6,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 
 	"golang.org/x/mod/modfile"
 )
-
-// Type identifies where a go.mod was loaded from.
-type Type string
 
 const (
 	// Local indicates a go.mod loaded from the local filesystem.
@@ -20,6 +18,14 @@ const (
 	// GitHub indicates a go.mod fetched from a remote GitHub repository.
 	GitHub Type = "github"
 )
+
+var (
+	urlRegex                = regexp.MustCompile(`https?://[^\s"'<>\],]+`)
+	schemelessUserPassRegex = regexp.MustCompile(`(^|[\s"'\(\[])([a-zA-Z0-9_.-]+:[^@\s/]+)@([a-zA-Z0-9_.-]+)`)
+)
+
+// Type identifies where a go.mod was loaded from.
+type Type string
 
 // ParsedSource represents a parsed go.mod file.
 type ParsedSource struct {
@@ -40,26 +46,26 @@ type LocalProvider struct {
 	Path string
 }
 
-// NewLocalProvider returns a new LocalProvider for the given file path.
-func NewLocalProvider(path string) LocalProvider {
-	return LocalProvider{Path: path}
-}
-
-func (p LocalProvider) Name() string { return p.Path }
-func (p LocalProvider) Type() Type   { return Local }
-func (p LocalProvider) Parse(_ context.Context, _ *http.Client) (ParsedSource, error) {
-	return ParseLocalMod(p.Path)
-}
-
 // GitHubProvider implements Provider for GitHub repositories.
 type GitHubProvider struct {
 	PathOrURL   string
 	URLResolver func(string) []string
 }
 
+// NewLocalProvider returns a new LocalProvider for the given file path.
+func NewLocalProvider(path string) LocalProvider {
+	return LocalProvider{Path: path}
+}
+
 // NewGitHubProvider returns a new GitHubProvider for the given path or URL.
 func NewGitHubProvider(pathOrURL string) GitHubProvider {
 	return GitHubProvider{PathOrURL: pathOrURL}
+}
+
+func (p LocalProvider) Name() string { return p.Path }
+func (p LocalProvider) Type() Type   { return Local }
+func (p LocalProvider) Parse(_ context.Context, _ *http.Client) (ParsedSource, error) {
+	return ParseLocalMod(p.Path)
 }
 
 func (p GitHubProvider) Name() string { return SanitizeURL(p.PathOrURL) }
@@ -89,6 +95,28 @@ func ParseGithubMod(ctx context.Context, httpClient *http.Client, pathOrURL stri
 	return parseModContent(resolvedURL, GitHub, content)
 }
 
+// SanitizeURL strips credentials (usernames, passwords, or tokens) and
+// sensitive query parameters from a URL or text containing URLs.
+func SanitizeURL(raw string) string {
+	if raw == "" {
+		return raw
+	}
+
+	// Fast path: clean single URL with scheme and no spaces or surrounding punctuation
+	if (strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://")) &&
+		!strings.ContainsAny(raw, " \t\n\r\"'[]<>,") {
+		return sanitizeSingleURL(raw)
+	}
+
+	// For general text (error messages, compound strings), find and sanitize all embedded URLs
+	sanitized := urlRegex.ReplaceAllStringFunc(raw, sanitizeSingleURL)
+
+	// Also redact any schemeless credentials: user:pass@host
+	sanitized = schemelessUserPassRegex.ReplaceAllString(sanitized, "${1}redacted@${3}")
+
+	return sanitized
+}
+
 // parseModContent parses the module content and extracts required dependencies.
 func parseModContent(sourceName string, sourceType Type, content []byte) (ParsedSource, error) {
 	modFile, err := modfile.ParseLax(sourceName, content, nil)
@@ -102,12 +130,8 @@ func parseModContent(sourceName string, sourceType Type, content []byte) (Parsed
 	}, nil
 }
 
-// SanitizeURL strips credentials (usernames, passwords, or tokens) and
-// sensitive query parameters from a raw URL.
-func SanitizeURL(raw string) string {
-	if !strings.Contains(raw, "://") {
-		return raw
-	}
+// sanitizeSingleURL sanitizes a single parsed HTTP/HTTPS URL.
+func sanitizeSingleURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return raw
@@ -144,10 +168,10 @@ func SanitizeURL(raw string) string {
 func isSensitiveParam(key string) bool {
 	lower := strings.ToLower(key)
 	switch lower {
-	case "key", "api_key", "apikey", "pat", "pass", "pwd", "bearer":
+	case "key", "api_key", "apikey", "pat", "pass", "pwd", "bearer", "sig", "signature", "jwt", "session", "sessionid", "hash":
 		return true
 	}
 	return strings.Contains(lower, "token") || strings.Contains(lower, "secret") ||
 		strings.Contains(lower, "password") || strings.Contains(lower, "auth") ||
-		strings.Contains(lower, "credential")
+		strings.Contains(lower, "credential") || strings.Contains(lower, "private")
 }

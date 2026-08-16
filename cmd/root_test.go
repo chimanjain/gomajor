@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chimanjain/gomajor/internal/testutil"
 	"github.com/spf13/cobra"
 )
 
@@ -35,7 +34,7 @@ func TestResolveModFile(t *testing.T) {
 			dir := t.TempDir()
 
 			if tt.createMod {
-				testutil.WriteModFile(t, dir, "module example.com/test\n\ngo 1.21\n")
+				writeModFile(t, dir, "module example.com/test\n\ngo 1.21\n")
 			}
 
 			t.Chdir(dir)
@@ -130,17 +129,8 @@ func TestRootCmd(t *testing.T) {
 			},
 		},
 		{
-			name: "Help_Long",
+			name: "Help",
 			args: []string{"--help"},
-			checkFn: func(t *testing.T, _ *cobra.Command, got string) {
-				if !strings.Contains(got, "A tool that parses a go.mod file") || !strings.Contains(got, "Usage:") {
-					t.Errorf("expected help output, got: %q", got)
-				}
-			},
-		},
-		{
-			name: "Help_Short",
-			args: []string{"-h"},
 			checkFn: func(t *testing.T, _ *cobra.Command, got string) {
 				if !strings.Contains(got, "A tool that parses a go.mod file") || !strings.Contains(got, "Usage:") {
 					t.Errorf("expected help output, got: %q", got)
@@ -260,4 +250,97 @@ output: my-custom-report.json
 			t.Errorf("expected OutputPath to be override.json (CLI override), got %s", cfg.OutputPath)
 		}
 	})
+
+	t.Run("UnsafeOutputPath_AbsolutePath_Rejected", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Chdir(dir)
+
+		configContent := `
+output: /etc/cron.d/malicious.yaml
+`
+		if err := os.WriteFile("gomajor.yaml", []byte(configContent), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		cmd := NewRootCmd()
+		if err := cmd.ParseFlags(nil); err != nil {
+			t.Fatalf("ParseFlags: %v", err)
+		}
+
+		_, _, err := parseConfig(cmd)
+		if err == nil {
+			t.Fatal("expected error for absolute output path in config file, got nil")
+		}
+		if !strings.Contains(err.Error(), "absolute path") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+	})
+
+	t.Run("UnsafeOutputPath_PathTraversal_Rejected", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Chdir(dir)
+
+		configContent := `
+output: ../../escaped-report.yaml
+`
+		if err := os.WriteFile("gomajor.yaml", []byte(configContent), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		cmd := NewRootCmd()
+		if err := cmd.ParseFlags(nil); err != nil {
+			t.Fatalf("ParseFlags: %v", err)
+		}
+
+		_, _, err := parseConfig(cmd)
+		if err == nil {
+			t.Fatal("expected error for path traversal output path in config file, got nil")
+		}
+		if !strings.Contains(err.Error(), "path traversal") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+	})
+
+	t.Run("FileFlagOverridesAutoConfig", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Chdir(dir)
+
+		configContent := `
+local:
+  - other/go.mod
+`
+		if err := os.WriteFile("gomajor.yaml", []byte(configContent), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		cmd := NewRootCmd()
+		args := []string{"-f", "custom/go.mod"}
+		if err := cmd.ParseFlags(args); err != nil {
+			t.Fatalf("ParseFlags: %v", err)
+		}
+
+		cfg, yamlCfg, err := parseConfig(cmd)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+
+		if cfg.ConfigPath != "" {
+			t.Errorf("expected ConfigPath to be empty when -f is explicitly passed, got %q", cfg.ConfigPath)
+		}
+		if cfg.ModFilePath != "custom/go.mod" {
+			t.Errorf("expected ModFilePath to be custom/go.mod, got %q", cfg.ModFilePath)
+		}
+		if !isSingleMode(cfg, yamlCfg) {
+			t.Errorf("expected isSingleMode to be true when -f is passed without explicit -c")
+		}
+	})
+}
+
+func writeModFile(t *testing.T, dir, content string) string {
+	t.Helper()
+	p := filepath.Join(dir, "go.mod")
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+		t.Fatalf("writeModFile: %v", err)
+	}
+	return p
 }

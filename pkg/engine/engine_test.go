@@ -37,31 +37,12 @@ func TestNormalizeSources(t *testing.T) {
 	}
 }
 
-func setupMockProxy(_ *testing.T) (*httptest.Server, *config.Config) {
-	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
-			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
-			return
-		}
-		rw.WriteHeader(http.StatusNotFound)
-	}))
-
-	cfg := config.DefaultConfig()
-	cfg.Client = checker.NewClient(
-		checker.WithHTTPClient(server.Client()),
-		checker.WithProxyURLs([]string{server.URL}),
-	)
-	cfg.MaxProbe = 2
-
-	return server, cfg
-}
-
 func TestCheckDependencies(t *testing.T) {
 	t.Run("Basic", func(t *testing.T) {
-		server, cfg := setupMockProxy(t)
+		server, opts := setupMockProxy(t)
 		defer server.Close()
 
-		eng := New(cfg)
+		eng := New(opts)
 
 		reqs := []*modfile.Require{
 			{Mod: module.Version{Path: "github.com/foo/bar", Version: "v1.0.0"}},
@@ -98,14 +79,15 @@ func TestCheckDependencies(t *testing.T) {
 		}))
 		defer server.Close()
 
-		cfg := config.DefaultConfig()
-		cfg.Client = checker.NewClient(
-			checker.WithHTTPClient(server.Client()),
-			checker.WithProxyURLs([]string{server.URL}),
-		)
-		cfg.MaxProbe = 2
+		opts := Options{
+			Client: checker.NewClient(
+				checker.WithHTTPClient(server.Client()),
+				checker.WithProxyURLs([]string{server.URL}),
+			),
+			MaxProbe: 2,
+		}
 
-		eng := New(cfg)
+		eng := New(opts)
 
 		reqs := []*modfile.Require{
 			{Mod: module.Version{Path: "github.com/foo/bar", Version: "v1.0.0"}},
@@ -139,7 +121,7 @@ func TestCheckDependencies(t *testing.T) {
 }
 
 func TestRunLocalSource(t *testing.T) {
-	server, cfg := setupMockProxy(t)
+	server, opts := setupMockProxy(t)
 	defer server.Close()
 
 	dir := t.TempDir()
@@ -149,7 +131,7 @@ func TestRunLocalSource(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	eng := New(cfg)
+	eng := New(opts)
 	results, err := eng.RunLocalSource(context.Background(), modPath)
 	if err != nil {
 		t.Fatalf("RunLocalSource failed: %v", err)
@@ -175,7 +157,7 @@ func TestRunLocalSource(t *testing.T) {
 }
 
 func TestRunMultiSources(t *testing.T) {
-	server, cfg := setupMockProxy(t)
+	server, opts := setupMockProxy(t)
 	defer server.Close()
 
 	dir := t.TempDir()
@@ -185,7 +167,7 @@ func TestRunMultiSources(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	eng := New(cfg)
+	eng := New(opts)
 	yamlCfg := config.YAMLConfig{
 		Local: []string{modPath},
 	}
@@ -201,7 +183,7 @@ func TestRunMultiSources(t *testing.T) {
 }
 
 func TestRunMultiSources_Empty(t *testing.T) {
-	eng := New(config.DefaultConfig())
+	eng := New(Options{})
 	_, err := eng.RunMultiSources(context.Background(), config.YAMLConfig{})
 	if err == nil {
 		t.Error("Expected error for empty sources, got nil")
@@ -220,4 +202,24 @@ func TestNewWithOptions(t *testing.T) {
 	if eng.opts.Client == nil {
 		t.Error("eng.opts.Client should be initialized with default client")
 	}
+}
+
+func setupMockProxy(_ *testing.T) (*httptest.Server, Options) {
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
+			_ = json.NewEncoder(rw).Encode(map[string]string{"Version": "v2.0.0"})
+			return
+		}
+		rw.WriteHeader(http.StatusNotFound)
+	}))
+
+	opts := Options{
+		Client: checker.NewClient(
+			checker.WithHTTPClient(server.Client()),
+			checker.WithProxyURLs([]string{server.URL}),
+		),
+		MaxProbe: 2,
+	}
+
+	return server, opts
 }

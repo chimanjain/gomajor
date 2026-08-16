@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/chimanjain/gomajor/internal/modpath"
-	"github.com/chimanjain/gomajor/pkg/engine"
+	"github.com/chimanjain/gomajor/pkg/model"
 	"github.com/fatih/color"
 	"go.yaml.in/yaml/v3"
 	"golang.org/x/text/width"
@@ -18,10 +18,10 @@ import (
 
 // YAMLOutput defines the structured schema for the saved YAML output.
 type YAMLOutput struct {
-	Results []engine.SourceResult `yaml:"results" json:"results"`
+	Results []model.SourceResult `yaml:"results" json:"results"`
 }
 
-func WriteReport(w io.Writer, outputPath string, isJSON bool, results []engine.SourceResult) error {
+func WriteReport(w io.Writer, outputPath string, isJSON bool, results []model.SourceResult) error {
 	cleanPath := filepath.Clean(outputPath)
 	if fi, err := os.Lstat(cleanPath); err == nil && (fi.Mode()&os.ModeSymlink != 0) {
 		return fmt.Errorf("refusing to write report to symlink: %s", cleanPath)
@@ -36,7 +36,7 @@ func WriteReport(w io.Writer, outputPath string, isJSON bool, results []engine.S
 	}
 
 	if err == nil {
-		err = os.WriteFile(cleanPath, data, 0o600)
+		err = safeWriteReportFile(cleanPath, data)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to write %s output: %w", formatName, err)
@@ -45,11 +45,126 @@ func WriteReport(w io.Writer, outputPath string, isJSON bool, results []engine.S
 	return nil
 }
 
-func PrintMultiJSONResults(w io.Writer, results []engine.SourceResult) error {
+func PrintMultiJSONResults(w io.Writer, results []model.SourceResult) error {
 	outputData := YAMLOutput{Results: results}
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(outputData)
+}
+
+func PrintTextResults(w io.Writer, results []model.SourceResult, singleMode bool, disableMinor bool) {
+	if singleMode {
+		if len(results) == 0 {
+			return
+		}
+		res := results[0]
+		if len(res.Dependencies) == 0 {
+			_, _ = fmt.Fprintln(w, "No matching dependencies found in", sanitizeTerminalString(res.Source))
+			return
+		}
+
+		if printDependencies(w, "", res.Dependencies, disableMinor) {
+			_, _ = fmt.Fprintln(w)
+		}
+	} else {
+		for i, res := range results {
+			if i > 0 {
+				_, _ = fmt.Fprintln(w)
+			}
+			source := sanitizeTerminalString(res.Source)
+			sourceType := sanitizeTerminalString(string(res.SourceType))
+			_, _ = fmt.Fprintf(w, "%s (%s)\n", color.HiCyanString(source), color.HiBlackString(sourceType))
+
+			if len(res.Dependencies) == 0 {
+				_, _ = fmt.Fprintln(w, "  No matching dependencies found.")
+				continue
+			}
+
+			printDependencies(w, "  ", res.Dependencies, disableMinor)
+		}
+	}
+}
+
+func PrintAnalysisHeader(w io.Writer, count int, checkAll bool, path string) {
+	if w == nil {
+		return
+	}
+	path = sanitizeTerminalString(path)
+	scope := "direct dependencies"
+	if checkAll {
+		scope = "dependencies (direct and indirect)"
+	}
+	_, _ = fmt.Fprintf(w, "%s from %s...\n\n", color.HiCyanString(fmt.Sprintf("Analyzing %d %s", count, scope)), color.HiBlackString(path))
+}
+
+func safeWriteReportFile(cleanPath string, data []byte) error {
+	if fi, err := os.Lstat(cleanPath); err == nil && (fi.Mode()&os.ModeSymlink != 0) {
+		return fmt.Errorf("refusing to write report to symlink: %s", cleanPath)
+	}
+
+	dir := filepath.Dir(cleanPath)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return err
+	}
+
+	tmpFile, err := os.CreateTemp(dir, ".gomajor-report-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmpFile.Name()
+	defer func() {
+		_ = os.Remove(tmpName)
+	}()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		return err
+	}
+
+	// Double check before atomic rename to ensure target wasn't replaced with symlink
+	if fi, err := os.Lstat(cleanPath); err == nil && (fi.Mode()&os.ModeSymlink != 0) {
+		return fmt.Errorf("refusing to write report to symlink: %s", cleanPath)
+	}
+
+	return os.Rename(tmpName, cleanPath)
+}
+
+// sanitizeTerminalString strips ANSI escape sequences and ASCII control characters
+// to prevent terminal injection attacks from untrusted module or source names.
+func sanitizeTerminalString(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inEscape := false
+	for i := 0; i < len(s); {
+		if inEscape {
+			if s[i] == 'm' || (s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z') {
+				inEscape = false
+			}
+			i++
+			continue
+		}
+		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			inEscape = true
+			i += 2
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if size == 0 {
+			break
+		}
+		i += size
+		if r < 0x20 || r == 0x7f {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // visualLen returns the display width of a string in terminal columns.
@@ -91,24 +206,20 @@ func visualLen(s string) int {
 	return count
 }
 
-const spacesStr = "                                                                                                                                                                                                        "
-
 func padWithLen(s string, vlen, w int) string {
 	if vlen >= w {
 		return s
 	}
-	need := w - vlen
-	if need <= len(spacesStr) {
-		return s + spacesStr[:need]
-	}
-	return s + strings.Repeat(" ", need)
-}
-
-func pad(s string, w int) string {
-	return padWithLen(s, visualLen(s), w)
+	return s + strings.Repeat(" ", w-vlen)
 }
 
 func formatRow(mod, current, minorVer string, hasMinor bool, majorVer, majorPath string, hasMajor bool) []string {
+	mod = sanitizeTerminalString(mod)
+	current = sanitizeTerminalString(current)
+	minorVer = sanitizeTerminalString(minorVer)
+	majorVer = sanitizeTerminalString(majorVer)
+	majorPath = sanitizeTerminalString(majorPath)
+
 	minor, major, newPath := "-", "-", "-"
 	if hasMinor {
 		minor = color.GreenString(minorVer)
@@ -169,11 +280,14 @@ func printTable(w io.Writer, indent string, rows [][]string) {
 	}
 }
 
-func printDependencies(w io.Writer, indent string, deps []engine.DependencyInfo, disableMinor bool) bool {
+func printDependencies(w io.Writer, indent string, deps []model.DependencyInfo, disableMinor bool) bool {
 	var rows [][]string
 	for _, dep := range deps {
 		if dep.HasUpdate || dep.HasMinorUpdate {
-			basePath, _, _ := modpath.ParseModulePath(dep.Module)
+			basePath := dep.BasePath
+			if basePath == "" {
+				basePath, _, _ = modpath.ParseModulePath(dep.Module)
+			}
 			rows = append(rows, formatRow(basePath, dep.CurrentVersion, dep.LatestMinorVersion, dep.HasMinorUpdate, dep.LatestMajorVersion, dep.LatestMajorPath, dep.HasUpdate))
 		}
 	}
@@ -188,46 +302,4 @@ func printDependencies(w io.Writer, indent string, deps []engine.DependencyInfo,
 	}
 	printTable(w, indent, rows)
 	return true
-}
-
-func PrintTextResults(w io.Writer, results []engine.SourceResult, singleMode bool, disableMinor bool) {
-	if singleMode {
-		if len(results) == 0 {
-			return
-		}
-		res := results[0]
-		if len(res.Dependencies) == 0 {
-			_, _ = fmt.Fprintln(w, "No matching dependencies found in", res.Source)
-			return
-		}
-
-		if printDependencies(w, "", res.Dependencies, disableMinor) {
-			_, _ = fmt.Fprintln(w)
-		}
-	} else {
-		for i, res := range results {
-			if i > 0 {
-				_, _ = fmt.Fprintln(w)
-			}
-			_, _ = fmt.Fprintf(w, "%s (%s)\n", color.HiCyanString(res.Source), color.HiBlackString(string(res.SourceType)))
-
-			if len(res.Dependencies) == 0 {
-				_, _ = fmt.Fprintln(w, "  No matching dependencies found.")
-				continue
-			}
-
-			printDependencies(w, "  ", res.Dependencies, disableMinor)
-		}
-	}
-}
-
-func PrintAnalysisHeader(w io.Writer, count int, checkAll bool, path string) {
-	if w == nil {
-		return
-	}
-	scope := "direct dependencies"
-	if checkAll {
-		scope = "dependencies (direct and indirect)"
-	}
-	_, _ = fmt.Fprintf(w, "%s from %s...\n\n", color.HiCyanString(fmt.Sprintf("Analyzing %d %s", count, scope)), color.HiBlackString(path))
 }
