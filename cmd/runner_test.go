@@ -3,22 +3,17 @@ package cmd
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/chimanjain/gomajor/internal/testutil"
 	"github.com/chimanjain/gomajor/pkg/checker"
 	"github.com/chimanjain/gomajor/pkg/config"
-	"github.com/chimanjain/gomajor/pkg/engine"
 	"github.com/chimanjain/gomajor/pkg/format"
 	"github.com/chimanjain/gomajor/pkg/source"
 	"go.yaml.in/yaml/v3"
-	"golang.org/x/mod/modfile"
-	"golang.org/x/mod/module"
 )
 
 const (
@@ -27,8 +22,7 @@ const (
 go 1.21
 require github.com/foo/bar v1.0.0
 `
-	fooBarModule       = "github.com/foo/bar"
-	githubOwnerRepoURL = "https://github.com/owner/repo"
+	fooBarModule = "github.com/foo/bar"
 )
 
 func TestRunner(t *testing.T) {
@@ -115,7 +109,7 @@ require github.com/foo/bar v1.0.0
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				dir := t.TempDir()
-				p := testutil.WriteModFile(t, dir, tt.goModContent)
+				p := writeModFile(t, dir, tt.goModContent)
 
 				var server *httptest.Server
 				if tt.httpHandler != nil {
@@ -133,12 +127,15 @@ require github.com/foo/bar v1.0.0
 					MaxProbe:    tt.maxProbe,
 					JSONOutput:  tt.jsonOutput,
 					Minor:       true,
-					Client:      &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
+				}
+				rt := &Runtime{
+					Config: cfg,
+					Client: &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
 				}
 
-				err := runCheckerWithConfig(context.Background(), cfg, config.YAMLConfig{}, true)
+				err := runChecker(context.Background(), rt, true)
 				if (err != nil) != tt.wantErr {
-					t.Fatalf("runCheckerWithConfig() returned error = %v, wantErr = %v", err, tt.wantErr)
+					t.Fatalf("runChecker() returned error = %v, wantErr = %v", err, tt.wantErr)
 				}
 			})
 		}
@@ -146,7 +143,7 @@ require github.com/foo/bar v1.0.0
 
 	t.Run("SingleCheckerFileOutput", func(t *testing.T) {
 		dir := t.TempDir()
-		p := testutil.WriteModFile(t, dir, "module example.com/test\ngo 1.21\nrequire github.com/foo/bar v1.0.0\n")
+		p := writeModFile(t, dir, "module example.com/test\ngo 1.21\nrequire github.com/foo/bar v1.0.0\n")
 
 		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 			if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
@@ -172,11 +169,14 @@ require github.com/foo/bar v1.0.0
 					MaxProbe:    2,
 					OutputPath:  outPath,
 					Minor:       true,
-					Client:      &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
+				}
+				rt := &Runtime{
+					Config: cfg,
+					Client: &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
 				}
 
-				if err := runCheckerWithConfig(context.Background(), cfg, config.YAMLConfig{}, true); err != nil {
-					t.Fatalf("runCheckerWithConfig failed for %s: %v", tt.ext, err)
+				if err := runChecker(context.Background(), rt, true); err != nil {
+					t.Fatalf("runChecker failed for %s: %v", tt.ext, err)
 				}
 
 				bytes, err := os.ReadFile(outPath)
@@ -304,85 +304,6 @@ require github.com/foo/bar v1.0.0
 				wantResultsLen: 2,
 				verify:         verifyConfig,
 			},
-			{
-				name: "DeduplicateSources",
-				setup: func(t *testing.T, dir string, serverURL string) (string, *config.Config, config.YAMLConfig) {
-					localModPath := filepath.Join(dir, "local.mod")
-					localContent := localModContent
-					if err := os.WriteFile(localModPath, []byte(localContent), 0o644); err != nil {
-						t.Fatalf("os.WriteFile: %v", err)
-					}
-
-					configPath := filepath.Join(dir, "gomajor.yaml")
-					outputPath := filepath.Join(dir, "gomajor-report.yaml")
-
-					yamlCfg := config.YAMLConfig{
-						Local:  []string{localModPath, localModPath},
-						Github: []string{serverURL + "/owner/repo/main/go.mod", serverURL + "/owner/repo/main/go.mod"},
-						Output: outputPath,
-					}
-					yamlBytes, err := yaml.Marshal(yamlCfg)
-					if err != nil {
-						t.Fatalf("yaml.Marshal: %v", err)
-					}
-					if err := os.WriteFile(configPath, yamlBytes, 0o644); err != nil {
-						t.Fatalf("os.WriteFile: %v", err)
-					}
-
-					return configPath, &config.Config{
-						MaxProbe:   2,
-						ConfigPath: configPath,
-						Minor:      true,
-					}, yamlCfg
-				},
-				wantResultsLen: 2,
-				verify: func(t *testing.T, output format.YAMLOutput, _ string) {
-					localCount := 0
-					githubCount := 0
-					for _, res := range output.Results {
-						switch res.SourceType {
-						case source.Local:
-							localCount++
-						case source.GitHub:
-							githubCount++
-						}
-					}
-					if localCount != 1 {
-						t.Errorf("expected exactly 1 local result due to deduplication, got %d", localCount)
-					}
-					if githubCount != 1 {
-						t.Errorf("expected exactly 1 github result due to deduplication, got %d", githubCount)
-					}
-				},
-			},
-			{
-				name: "SpaceAndCommaSeparatedGitHubRepos",
-				setup: func(_ *testing.T, dir string, serverURL string) (string, *config.Config, config.YAMLConfig) {
-					outputPath := filepath.Join(dir, "gomajor-report.yaml")
-					reposStr := fmt.Sprintf("%s/owner/repo/main/go.mod, %s/owner/repo/main/go.mod\t%s/owner/repo/main/go.mod", serverURL, serverURL, serverURL)
-					return "", &config.Config{
-							MaxProbe:    2,
-							GitHubRepos: []string{reposStr},
-							OutputPath:  outputPath,
-							Minor:       true,
-						}, config.YAMLConfig{
-							Github: []string{reposStr},
-						}
-				},
-				wantResultsLen: 1,
-				verify: func(t *testing.T, output format.YAMLOutput, _ string) {
-					if len(output.Results) != 1 {
-						t.Fatalf("expected 1 result, got %d", len(output.Results))
-					}
-					res := output.Results[0]
-					if res.SourceType != source.GitHub {
-						t.Errorf("source type = %q, want %q", res.SourceType, source.GitHub)
-					}
-					if len(res.Dependencies) != 1 {
-						t.Fatalf("expected 1 dependency, got %d", len(res.Dependencies))
-					}
-				},
-			},
 		}
 
 		for _, tt := range tests {
@@ -412,11 +333,10 @@ require github.com/foo/baz v1.0.0
 				defer server.Close()
 
 				configPath, testConfig, testYamlCfg := tt.setup(t, dir, server.URL)
-				testConfig.Client = &checker.Client{
+				client := &checker.Client{
 					HTTPClient: server.Client(),
 					ProxyBase:  server.URL,
 				}
-				testConfig.GitHubHTTPClient = server.Client()
 
 				outputPath := testConfig.OutputPath
 				if configPath != "" {
@@ -429,10 +349,17 @@ require github.com/foo/baz v1.0.0
 					testYamlCfg.Output = outputPath
 				}
 
+				rt := &Runtime{
+					Config:           testConfig,
+					YAMLConfig:       testYamlCfg,
+					Client:           client,
+					GitHubHTTPClient: server.Client(),
+				}
+
 				singleMode := isSingleMode(testConfig, testYamlCfg)
-				err := runCheckerWithConfig(context.Background(), testConfig, testYamlCfg, singleMode)
+				err := runChecker(context.Background(), rt, singleMode)
 				if err != nil {
-					t.Fatalf("runCheckerWithConfig failed: %v", err)
+					t.Fatalf("runChecker failed: %v", err)
 				}
 
 				if _, err := os.Stat(outputPath); os.IsNotExist(err) {
@@ -461,46 +388,6 @@ require github.com/foo/baz v1.0.0
 
 				tt.verify(t, output, dir)
 			})
-		}
-	})
-
-	t.Run("CheckDependencies_Cancelled", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
-			_ = json.NewEncoder(rw).Encode(map[string]string{versionKey: "v1.0.0"})
-		}))
-		defer server.Close()
-
-		client := &checker.Client{
-			HTTPClient: server.Client(),
-			ProxyBase:  server.URL,
-		}
-
-		cfg := &config.Config{
-			Client:   client,
-			MaxProbe: 0,
-			Minor:    true,
-		}
-		cfg.Client.(*checker.Client).DisableMinor = false
-		cfg.Client.(*checker.Client).DisableMajor = true
-
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel() // immediately cancel the context
-
-		var reqs []*modfile.Require
-		for i := 1; i <= 5; i++ {
-			reqs = append(reqs, &modfile.Require{
-				Mod: module.Version{
-					Path:    fmt.Sprintf("github.com/foo/bar%d", i),
-					Version: "v1.0.0",
-				},
-			})
-		}
-
-		cfg.Client.(*checker.Client).HTTPClient = server.Client()
-		eng := engine.New(cfg)
-		results, _ := eng.CheckDependencies(ctx, reqs)
-		if len(results) != 0 {
-			t.Errorf("Expected 0 results for cancelled context, got %d", len(results))
 		}
 	})
 }

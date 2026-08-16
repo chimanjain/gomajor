@@ -3,7 +3,9 @@ package checker
 import (
 	"cmp"
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,11 +14,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cenkalti/backoff/v7"
+	"github.com/chimanjain/gomajor/internal/goenv"
 	"github.com/chimanjain/gomajor/internal/modpath"
 	"github.com/chimanjain/gomajor/pkg/constants"
-	"github.com/chimanjain/gomajor/utils"
 	"golang.org/x/mod/module"
 	"golang.org/x/mod/semver"
 	"golang.org/x/sync/errgroup"
@@ -28,6 +31,8 @@ const (
 	directProxy  = "direct"
 	offProxy     = "off"
 )
+
+var errNotFound = errors.New("module version not found")
 
 // ModChecker is the interface satisfied by *Client and accepted by config.Config.
 // It allows callers to substitute a test double without constructing a real HTTP
@@ -47,7 +52,6 @@ type Client struct {
 	DisableMinor bool
 	DisableMajor bool
 
-	initOnce       sync.Once
 	latestCache    sync.Map // maps modPath to latest version found
 	sfGroup        singleflight.Group
 	sem            chan struct{}
@@ -57,61 +61,46 @@ type Client struct {
 // Option configures a Client.
 type Option func(*Client)
 
-// WithHTTPClient sets a custom HTTP client.
-func WithHTTPClient(hc *http.Client) Option {
-	return func(c *Client) { c.HTTPClient = hc }
+// ModuleInfo holds information about a module and any discovered major update.
+type ModuleInfo struct {
+	// Current is the module path as it appears in go.mod (e.g. github.com/user/gomodule/v2).
+	Current string
+	// CurrentVersion is the semver version currently required (e.g. v2.50.0).
+	CurrentVersion string
+	// BasePath is the module path without the major-version suffix (e.g. github.com/user/gomodule).
+	BasePath string
+	// Separator is the version suffix separator used in this module path ("/" or ".").
+	Separator string
+	// CurrentMajor is the currently used major version number (1 for unversioned, 2+ otherwise).
+	CurrentMajor int
+	// LatestMajor is the highest major version found on the proxy.
+	LatestMajor int
+	// LatestMajorPath is the module path for the latest major version.
+	LatestMajorPath string
+	// LatestMajorVersion is the latest semver tag found for the newest major.
+	LatestMajorVersion string
+	// HasUpdate is true when LatestMajor > CurrentMajor.
+	HasUpdate bool
+	// LatestMinorVersion is the latest semver tag found for the current major version.
+	LatestMinorVersion string
+	// HasMinorUpdate is true when LatestMinorVersion is semantically greater than CurrentVersion.
+	HasMinorUpdate bool
 }
 
-// WithProxyURLs sets the ordered list of Go module proxy URLs.
-func WithProxyURLs(urls []string) Option {
-	return func(c *Client) {
-		c.ProxyURLs = urls
-		if len(urls) > 0 {
-			c.ProxyBase = urls[0]
-		}
-	}
+type cachedGlobs struct {
+	raw string
+	has bool
 }
 
-// WithDisableMinor disables minor version checking.
-func WithDisableMinor(b bool) Option {
-	return func(c *Client) { c.DisableMinor = b }
+type privateModuleMatcher struct {
+	cache atomic.Pointer[cachedGlobs]
 }
 
-// WithDisableMajor disables major version checking.
-func WithDisableMajor(b bool) Option {
-	return func(c *Client) { c.DisableMajor = b }
-}
-
-// WithConcurrencyLimit sets the maximum number of concurrent HTTP requests.
-func WithConcurrencyLimit(n int) Option {
-	return func(c *Client) {
-		if n > 0 {
-			c.sem = make(chan struct{}, n)
-		}
-	}
-}
-
-func SafeCheckRedirect(req *http.Request, via []*http.Request) error {
-	if len(via) >= 10 {
-		return fmt.Errorf("stopped after 10 redirects")
-	}
-	if len(via) > 0 {
-		prev := via[len(via)-1]
-		if !strings.EqualFold(prev.URL.Hostname(), req.URL.Hostname()) {
-			req.Header.Del("Authorization")
-		}
-	}
-	return nil
-}
-
-func defaultTransport() http.RoundTripper {
-	if t, ok := http.DefaultTransport.(*http.Transport); ok {
-		cloned := t.Clone()
-		cloned.MaxIdleConns = constants.HTTPMaxIdleConns
-		cloned.MaxIdleConnsPerHost = constants.CheckerConcurrencyLimit
-		return cloned
-	}
-	return http.DefaultTransport
+type candResult struct {
+	major int
+	path  string
+	ver   string
+	ok    bool
 }
 
 // NewClient creates a Client with default settings, then applies opts.
@@ -136,7 +125,7 @@ func NewClient(opts ...Option) *Client {
 // (GOPROXY) with production-grade HTTP transport settings.
 // Any provided opts are applied after the environment-based configuration.
 func DefaultClient(opts ...Option) *Client {
-	proxy := utils.GetGoEnv("GOPROXY")
+	proxy := goenv.Get("GOPROXY")
 	if proxy == "" {
 		proxy = defaultProxy
 	}
@@ -175,85 +164,26 @@ func DefaultClient(opts ...Option) *Client {
 	return c
 }
 
-func (c *Client) lazyInit() {
-	c.initOnce.Do(func() {
-		if c.sem == nil {
-			c.sem = make(chan struct{}, constants.CheckerConcurrencyLimit)
-		}
-	})
-}
-
-var (
-	defaultClient     *Client
-	defaultClientOnce sync.Once
-)
-
-func getDefaultClient() *Client {
-	defaultClientOnce.Do(func() {
-		defaultClient = DefaultClient()
-	})
-	return defaultClient
-}
-
-// ModuleInfo holds information about a module and any discovered major update.
-type ModuleInfo struct {
-	// Current is the module path as it appears in go.mod (e.g. github.com/user/gomodule/v2).
-	Current string
-	// CurrentVersion is the semver version currently required (e.g. v2.50.0).
-	CurrentVersion string
-	// BasePath is the module path without the major-version suffix (e.g. github.com/user/gomodule).
-	BasePath string
-	// Separator is the version suffix separator used in this module path ("/" or ".").
-	Separator string
-	// CurrentMajor is the currently used major version number (1 for unversioned, 2+ otherwise).
-	CurrentMajor int
-	// LatestMajor is the highest major version found on the proxy.
-	LatestMajor int
-	// LatestMajorPath is the module path for the latest major version.
-	LatestMajorPath string
-	// LatestMajorVersion is the latest semver tag found for the newest major.
-	LatestMajorVersion string
-	// HasUpdate is true when LatestMajor > CurrentMajor.
-	HasUpdate bool
-	// LatestMinorVersion is the latest semver tag found for the current major version.
-	LatestMinorVersion string
-	// HasMinorUpdate is true when LatestMinorVersion is semantically greater than CurrentVersion.
-	HasMinorUpdate bool
-}
-
-type privateModuleMatcher struct {
-	mu             sync.RWMutex
-	cachedRawGlobs string
-	cachedHasGlobs bool
-}
-
 func (m *privateModuleMatcher) isPrivate(modPath string) bool {
-	globs := utils.GetGoEnv("GONOPROXY")
+	globs := goenv.Get("GONOPROXY")
 	if globs == "" {
-		globs = utils.GetGoEnv("GOPRIVATE")
+		globs = goenv.Get("GOPRIVATE")
 	}
 
-	m.mu.RLock()
-	if globs == m.cachedRawGlobs {
-		has := m.cachedHasGlobs
-		m.mu.RUnlock()
-		if !has {
-			return false
+	curr := m.cache.Load()
+	if curr == nil || curr.raw != globs {
+		newVal := &cachedGlobs{
+			raw: globs,
+			has: globs != "",
 		}
-		return module.MatchPrefixPatterns(globs, modPath)
+		m.cache.Store(newVal)
+		curr = newVal
 	}
-	m.mu.RUnlock()
 
-	m.mu.Lock()
-	m.cachedRawGlobs = globs
-	m.cachedHasGlobs = globs != ""
-	has := m.cachedHasGlobs
-	m.mu.Unlock()
-
-	if !has {
+	if !curr.has {
 		return false
 	}
-	return module.MatchPrefixPatterns(globs, modPath)
+	return module.MatchPrefixPatterns(curr.raw, modPath)
 }
 
 // latestVersion returns the latest released version for a module path from the
@@ -268,8 +198,6 @@ func (c *Client) latestVersion(ctx context.Context, modPath string) (string, boo
 	if c.privateMatcher.isPrivate(modPath) {
 		return "", false
 	}
-
-	c.lazyInit()
 
 	if ver, ok := c.latestCache.Load(modPath); ok {
 		return ver.(string), ver.(string) != ""
@@ -305,13 +233,14 @@ func (c *Client) latestVersion(ctx context.Context, modPath string) (string, boo
 
 // fetchLatestVersion performs the actual HTTP request to the Go proxy.
 func (c *Client) fetchLatestVersion(ctx context.Context, modPath string) (string, bool) {
-	sem := c.sem
-	select {
-	case sem <- struct{}{}:
-	case <-ctx.Done():
-		return "", false
+	if c.sem != nil {
+		select {
+		case c.sem <- struct{}{}:
+			defer func() { <-c.sem }()
+		case <-ctx.Done():
+			return "", false
+		}
 	}
-	defer func() { <-sem }()
 
 	escaped, err := module.EscapePath(modPath)
 	if err != nil {
@@ -339,15 +268,12 @@ func (c *Client) fetchLatestVersion(ctx context.Context, modPath string) (string
 func (c *Client) fetchFromProxy(ctx context.Context, proxyURL, escaped string) (version string, found bool, abort bool) {
 	url := fmt.Sprintf("%s/%s/@latest", proxyURL, escaped)
 
-	b := backoff.NewExponentialBackOff()
-	b.InitialInterval = constants.HTTPRetryInitialDelay
-
-	maxTries := max(uint(constants.HTTPMaxRetries), 1)
-
 	baseReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", false, true
 	}
+
+	maxTries := max(uint(constants.HTTPMaxRetries), 1)
 
 	operation := func() (string, error) {
 		req := baseReq.Clone(ctx)
@@ -356,7 +282,10 @@ func (c *Client) fetchFromProxy(ctx context.Context, proxyURL, escaped string) (
 		if err != nil {
 			return "", err
 		}
-		defer resp.Body.Close()
+		defer func() {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+			_ = resp.Body.Close()
+		}()
 
 		if resp.StatusCode == http.StatusOK {
 			limitReader := io.LimitReader(resp.Body, constants.ProxyResponseMaxBytes)
@@ -369,6 +298,10 @@ func (c *Client) fetchFromProxy(ctx context.Context, proxyURL, escaped string) (
 			return info.Version, nil
 		}
 
+		if resp.StatusCode == http.StatusNotFound {
+			return "", backoff.Permanent(errNotFound)
+		}
+
 		retryable := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
 		if !retryable {
 			return "", backoff.Permanent(fmt.Errorf("status %d", resp.StatusCode))
@@ -376,8 +309,20 @@ func (c *Client) fetchFromProxy(ctx context.Context, proxyURL, escaped string) (
 		return "", fmt.Errorf("status %d", resp.StatusCode)
 	}
 
-	infoVersion, err := backoff.Retry(ctx, operation, backoff.WithBackOff(b), backoff.WithMaxTries(maxTries))
+	// Fast path: attempt request once without allocating ExponentialBackOff
+	infoVersion, err := operation()
+	if err == nil {
+		return infoVersion, true, false
+	}
+	if errors.Is(err, errNotFound) || ctx.Err() != nil {
+		return "", false, ctx.Err() != nil
+	}
 
+	// Retryable failure: allocate backoff only for retries
+	b := backoff.NewExponentialBackOff()
+	b.InitialInterval = constants.HTTPRetryInitialDelay
+
+	infoVersion, err = backoff.Retry(ctx, operation, backoff.WithBackOff(b), backoff.WithMaxTries(maxTries-1))
 	if err == nil {
 		return infoVersion, true, false
 	}
@@ -387,13 +332,6 @@ func (c *Client) fetchFromProxy(ctx context.Context, proxyURL, escaped string) (
 	}
 
 	return "", false, false
-}
-
-type candResult struct {
-	major int
-	path  string
-	ver   string
-	ok    bool
 }
 
 // FindLatestMajor probes the Go proxy for higher major versions beyond currentMajor,
@@ -494,11 +432,6 @@ func (c *Client) Check(ctx context.Context, modPath, modVersion string, maxProbe
 	return info
 }
 
-// Check is a convenience function that uses the default client.
-func Check(ctx context.Context, modPath, modVersion string, maxProbe int) ModuleInfo {
-	return getDefaultClient().Check(ctx, modPath, modVersion, maxProbe)
-}
-
 // Close closes the idle HTTP connections of the client.
 func (c *Client) Close() {
 	if c.HTTPClient != nil && c.HTTPClient.Transport != nil {
@@ -506,4 +439,73 @@ func (c *Client) Close() {
 			tr.CloseIdleConnections()
 		}
 	}
+}
+
+// WithHTTPClient sets a custom HTTP client.
+func WithHTTPClient(hc *http.Client) Option {
+	return func(c *Client) { c.HTTPClient = hc }
+}
+
+// WithProxyURLs sets the ordered list of Go module proxy URLs.
+func WithProxyURLs(urls []string) Option {
+	return func(c *Client) {
+		c.ProxyURLs = urls
+		if len(urls) > 0 {
+			c.ProxyBase = urls[0]
+		}
+	}
+}
+
+// WithDisableMinor disables minor version checking.
+func WithDisableMinor(b bool) Option {
+	return func(c *Client) { c.DisableMinor = b }
+}
+
+// WithDisableMajor disables major version checking.
+func WithDisableMajor(b bool) Option {
+	return func(c *Client) { c.DisableMajor = b }
+}
+
+// WithConcurrencyLimit sets the maximum number of concurrent HTTP requests.
+func WithConcurrencyLimit(n int) Option {
+	return func(c *Client) {
+		if n > 0 {
+			c.sem = make(chan struct{}, n)
+		}
+	}
+}
+
+func SafeCheckRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("stopped after 10 redirects")
+	}
+	if req.URL.Scheme != "https" && req.URL.Scheme != "http" {
+		return fmt.Errorf("unsupported redirect scheme: %s", req.URL.Scheme)
+	}
+	if len(via) > 0 {
+		prev := via[len(via)-1]
+		if !strings.EqualFold(prev.URL.Hostname(), req.URL.Hostname()) ||
+			prev.URL.Port() != req.URL.Port() ||
+			(prev.URL.Scheme == "https" && req.URL.Scheme == "http") {
+			req.Header.Del("Authorization")
+		}
+	}
+	return nil
+}
+
+func defaultTransport() http.RoundTripper {
+	if t, ok := http.DefaultTransport.(*http.Transport); ok {
+		cloned := t.Clone()
+		cloned.MaxIdleConns = constants.HTTPMaxIdleConns
+		cloned.MaxIdleConnsPerHost = constants.CheckerConcurrencyLimit
+		if cloned.TLSClientConfig == nil {
+			cloned.TLSClientConfig = &tls.Config{
+				MinVersion: tls.VersionTLS12,
+			}
+		} else {
+			cloned.TLSClientConfig.MinVersion = tls.VersionTLS12
+		}
+		return cloned
+	}
+	return http.DefaultTransport
 }

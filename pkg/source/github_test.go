@@ -2,10 +2,12 @@ package source
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +15,40 @@ import (
 )
 
 const githubOwnerRepoURL = "https://github.com/owner/repo"
+
+type roundTripFunc func(req *http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestIsTrustedGitHubHost(t *testing.T) {
+	tests := []struct {
+		url  string
+		want bool
+	}{
+		{"https://github.com/owner/repo", true},
+		{"https://raw.githubusercontent.com/owner/repo/main/go.mod", true},
+		{"https://api.github.com/repos/owner/repo", true},
+		{"https://enterprise.github.com/api", true},
+		{"https://subdomain.githubusercontent.com/file", true},
+		{"https://attacker.com/repo", false},
+		{"https://evil-github.com/owner/repo", false},
+		{"https://notgithubusercontent.com", false},
+		{"http://127.0.0.1:8080/go.mod", false},
+		{"http://localhost:3000", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			got := isTrustedGitHubHost(tt.url)
+			if got != tt.want {
+				t.Errorf("isTrustedGitHubHost(%q) = %v, want %v", tt.url, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestGetGithubRawURLs(t *testing.T) {
 	tests := []struct {
@@ -115,20 +151,44 @@ func TestFetchGithubMod(t *testing.T) {
 			wantLen: 5 * constants.MB,
 		},
 		{
-			name: "Auth_TokenFromEnv",
+			name: "Auth_TokenFromEnv_TrustedHost",
+			setup: func(t *testing.T) (string, []string, *http.Client, func()) {
+				token := "env-token"
+				t.Setenv("GITHUB_TOKEN", token)
+				customClient := &http.Client{
+					Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+						if req.Header.Get("Authorization") != "token "+token {
+							return &http.Response{
+								StatusCode: http.StatusUnauthorized,
+								Body:       io.NopCloser(strings.NewReader("unauthorized")),
+							}, nil
+						}
+						return &http.Response{
+							StatusCode: http.StatusOK,
+							Body:       io.NopCloser(strings.NewReader("env-ok")),
+						}, nil
+					}),
+				}
+				return "https://raw.githubusercontent.com/owner/repo/main/go.mod", nil, customClient, func() {}
+			},
+			wantContent: "env-ok",
+		},
+		{
+			name: "Auth_TokenFromEnv_UntrustedHostBlocked",
 			setup: func(t *testing.T) (string, []string, *http.Client, func()) {
 				token := "env-token"
 				t.Setenv("GITHUB_TOKEN", token)
 				server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-					if req.Header.Get("Authorization") != "token "+token {
-						rw.WriteHeader(http.StatusUnauthorized)
+					if req.Header.Get("Authorization") != "" {
+						t.Errorf("expected no Authorization header sent to untrusted host, got %s", req.Header.Get("Authorization"))
+						rw.WriteHeader(http.StatusBadRequest)
 						return
 					}
-					_, _ = rw.Write([]byte("env-ok"))
+					_, _ = rw.Write([]byte("untrusted-ok"))
 				}))
 				return server.URL, nil, server.Client(), server.Close
 			},
-			wantContent: "env-ok",
+			wantContent: "untrusted-ok",
 		},
 		{
 			name: "Auth_TokenFromURL",

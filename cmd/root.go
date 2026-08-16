@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 
 	"github.com/chimanjain/gomajor/pkg/checker"
 	"github.com/chimanjain/gomajor/pkg/config"
@@ -18,8 +19,6 @@ import (
 
 // Version is the current version of gomajor.
 const Version = "v1.10.0"
-
-var rootCmd = NewRootCmd()
 
 func NewRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -36,24 +35,30 @@ available for your dependencies.`,
 			}
 
 			// Build the client with the correct minor/major settings.
-			// DefaultConfig leaves Client nil to avoid a wasted allocation.
 			client := checker.DefaultClient(
 				checker.WithDisableMinor(!cfg.Minor),
 				checker.WithDisableMajor(!cfg.Major),
 			)
-			cfg.Client = client
-			cfg.GitHubHTTPClient = client.HTTPClient
 
 			logLevel := slog.LevelInfo
 			if cfg.Verbose {
 				logLevel = slog.LevelDebug
 			}
-			handler := slog.NewTextHandler(cfg.Err, &slog.HandlerOptions{
+			handler := slog.NewTextHandler(cmd.ErrOrStderr(), &slog.HandlerOptions{
 				Level: logLevel,
 			})
-			cfg.Logger = slog.New(handler)
 
-			return runCheckerWithConfig(cmd.Context(), cfg, yamlCfg, isSingleMode(cfg, yamlCfg))
+			rt := &Runtime{
+				Config:           cfg,
+				YAMLConfig:       yamlCfg,
+				Client:           client,
+				GitHubHTTPClient: client.HTTPClient,
+				Out:              cmd.OutOrStdout(),
+				Err:              cmd.ErrOrStderr(),
+				Logger:           slog.New(handler),
+			}
+
+			return runChecker(cmd.Context(), rt, isSingleMode(cfg, yamlCfg))
 		},
 	}
 
@@ -73,6 +78,18 @@ available for your dependencies.`,
 	return cmd
 }
 
+func Execute() {
+	err := func() error {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
+		return NewRootCmd().ExecuteContext(ctx)
+	}()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
 func parseConfig(cmd *cobra.Command) (*config.Config, config.YAMLConfig, error) {
 	v := viper.New()
 	if err := v.BindPFlags(cmd.Flags()); err != nil {
@@ -81,8 +98,9 @@ func parseConfig(cmd *cobra.Command) (*config.Config, config.YAMLConfig, error) 
 
 	configPath := v.GetString("config")
 	configExplicit := cmd.Flags().Changed("config")
+	fileExplicit := cmd.Flags().Changed("file")
 
-	if !configExplicit && configPath == "" {
+	if !configExplicit && configPath == "" && !fileExplicit {
 		if _, err := os.Stat("gomajor.yaml"); err == nil {
 			configPath = "gomajor.yaml"
 		}
@@ -150,6 +168,9 @@ func parseConfig(cmd *cobra.Command) (*config.Config, config.YAMLConfig, error) 
 			}
 		}
 	case fileYamlCfg.Output != "":
+		if err := validateConfigOutputPath(fileYamlCfg.Output); err != nil {
+			return nil, config.YAMLConfig{}, fmt.Errorf("invalid output path in config file %s: %w", configPath, err)
+		}
 		cfg.OutputPath = fileYamlCfg.Output
 	default:
 		cfg.OutputPath = ""
@@ -169,23 +190,24 @@ func parseConfig(cmd *cobra.Command) (*config.Config, config.YAMLConfig, error) 
 	return cfg, yamlCfg, nil
 }
 
+// validateConfigOutputPath validates that output paths specified in configuration
+// files do not attempt path traversal or write to arbitrary absolute paths.
+func validateConfigOutputPath(outPath string) error {
+	clean := filepath.Clean(outPath)
+	if filepath.IsAbs(clean) {
+		return fmt.Errorf("absolute path %q is not allowed in config file; specify a relative path or use the CLI --output flag", outPath)
+	}
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path traversal %q is not allowed in config file; output must reside within the workspace", outPath)
+	}
+	return nil
+}
+
 // isSingleMode reports whether the invocation targets a single local go.mod
 // (no config file, no GitHub repos, no multi-source YAML entries). Extracting
 // this predicate avoids duplicating the condition in both the command and tests.
 func isSingleMode(cfg *config.Config, yamlCfg config.YAMLConfig) bool {
 	return cfg.ConfigPath == "" && len(cfg.GitHubRepos) == 0 && len(yamlCfg.Local) == 0 && len(yamlCfg.Github) == 0
-}
-
-func Execute() {
-	err := func() error {
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-		defer cancel()
-		return rootCmd.ExecuteContext(ctx)
-	}()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
 }
 
 // resolveModFile returns the path to use for go.mod, auto-discovering it when

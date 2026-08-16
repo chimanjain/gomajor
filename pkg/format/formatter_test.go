@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chimanjain/gomajor/pkg/engine"
+	"github.com/chimanjain/gomajor/pkg/model"
 	"github.com/chimanjain/gomajor/pkg/source"
 	"github.com/fatih/color"
 )
@@ -35,7 +35,7 @@ func TestFormatter(t *testing.T) {
 		}
 	})
 
-	t.Run("Pad", func(t *testing.T) {
+	t.Run("PadWithLen", func(t *testing.T) {
 		tests := []struct {
 			input string
 			width int
@@ -47,9 +47,9 @@ func TestFormatter(t *testing.T) {
 		}
 
 		for _, tt := range tests {
-			got := pad(tt.input, tt.width)
+			got := padWithLen(tt.input, visualLen(tt.input), tt.width)
 			if got != tt.want {
-				t.Errorf("pad(%q, %d) = %q, want %q", tt.input, tt.width, got, tt.want)
+				t.Errorf("padWithLen(%q, %d) = %q, want %q", tt.input, tt.width, got, tt.want)
 			}
 		}
 	})
@@ -76,6 +76,27 @@ func TestFormatter(t *testing.T) {
 		}
 	})
 
+	t.Run("SanitizeTerminalString", func(t *testing.T) {
+		tests := []struct {
+			input string
+			want  string
+		}{
+			{"github.com/foo/bar", "github.com/foo/bar"},
+			{"\x1b[2J\x1b[Hmalicious/pkg", "malicious/pkg"},
+			{"\x1b[31;1mcolored/pkg\x1b[0m", "colored/pkg"},
+			{"pkg\r\nwith\a\bcontrols", "pkgwithcontrols"},
+			{"unicode/模块/v2", "unicode/模块/v2"},
+			{"", ""},
+		}
+
+		for _, tt := range tests {
+			got := sanitizeTerminalString(tt.input)
+			if got != tt.want {
+				t.Errorf("sanitizeTerminalString(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		}
+	})
+
 	t.Run("PrintTable_Empty", func(_ *testing.T) {
 		// Just ensure it doesn't panic
 		printTable(io.Discard, "", nil)
@@ -97,11 +118,11 @@ func TestFormatter(t *testing.T) {
 }
 
 func TestPrintMultiJsonResults(t *testing.T) {
-	results := []engine.SourceResult{
+	results := []model.SourceResult{
 		{
 			Source:     "test-source",
 			SourceType: source.Local,
-			Dependencies: []engine.DependencyInfo{
+			Dependencies: []model.DependencyInfo{
 				{
 					Module:             "github.com/foo/bar",
 					CurrentVersion:     "v1.0.0",
@@ -126,6 +147,36 @@ func TestPrintMultiJsonResults(t *testing.T) {
 
 	if len(output.Results) != 1 || output.Results[0].Source != "test-source" {
 		t.Errorf("unexpected output struct: %+v", output)
+	}
+}
+
+func TestWriteReport_Success(t *testing.T) {
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, "subdir", "report.json")
+	results := []model.SourceResult{
+		{
+			Source:     "test-source",
+			SourceType: source.Local,
+			Dependencies: []model.DependencyInfo{
+				{
+					Module:         "github.com/foo/bar",
+					CurrentVersion: "v1.0.0",
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := WriteReport(&buf, outPath, true, results); err != nil {
+		t.Fatalf("WriteReport failed: %v", err)
+	}
+
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("failed to read report: %v", err)
+	}
+	if !strings.Contains(string(data), "github.com/foo/bar") {
+		t.Errorf("expected report to contain module, got: %s", string(data))
 	}
 }
 

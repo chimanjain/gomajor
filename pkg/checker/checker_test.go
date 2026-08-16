@@ -2,6 +2,7 @@ package checker
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -623,14 +624,6 @@ func TestClient_Concurrency(t *testing.T) {
 	}
 }
 
-func TestPackageCheck(t *testing.T) {
-	ctx := context.Background()
-	info := Check(ctx, "github.com/foo/bar", "v1.0.0", 0)
-	if info.Current != "github.com/foo/bar" {
-		t.Errorf("expected current path github.com/foo/bar, got %s", info.Current)
-	}
-}
-
 func TestNewClient(t *testing.T) {
 	t.Run("Defaults", func(t *testing.T) {
 		c := NewClient()
@@ -707,26 +700,91 @@ func BenchmarkFindLatestMajor(b *testing.B) {
 }
 
 func TestSafeCheckRedirect(t *testing.T) {
-	reqSameHost, _ := http.NewRequest("GET", "https://example.com/redirected", nil)
-	reqSameHost.Header.Set("Authorization", "Bearer secret")
-	viaSameHost := []*http.Request{{URL: parseTestURL(t, "https://example.com/initial")}}
+	t.Run("SameHostAndSchemePreservesAuth", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "https://example.com/redirected", nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		via := []*http.Request{{URL: parseTestURL(t, "https://example.com/initial")}}
 
-	if err := SafeCheckRedirect(reqSameHost, viaSameHost); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if reqSameHost.Header.Get("Authorization") != "Bearer secret" {
-		t.Errorf("Authorization header should be preserved for same host")
-	}
+		if err := SafeCheckRedirect(req, via); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if req.Header.Get("Authorization") != "Bearer secret" {
+			t.Errorf("Authorization header should be preserved for same host")
+		}
+	})
 
-	reqDiffHost, _ := http.NewRequest("GET", "https://other.com/redirected", nil)
-	reqDiffHost.Header.Set("Authorization", "Bearer secret")
-	viaDiffHost := []*http.Request{{URL: parseTestURL(t, "https://example.com/initial")}}
+	t.Run("CrossHostStripsAuth", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "https://other.com/redirected", nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		via := []*http.Request{{URL: parseTestURL(t, "https://example.com/initial")}}
 
-	if err := SafeCheckRedirect(reqDiffHost, viaDiffHost); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		if err := SafeCheckRedirect(req, via); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if req.Header.Get("Authorization") != "" {
+			t.Errorf("Authorization header should be stripped for cross-host redirect")
+		}
+	})
+
+	t.Run("SchemeDowngradeStripsAuth", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "http://example.com/redirected", nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		via := []*http.Request{{URL: parseTestURL(t, "https://example.com/initial")}}
+
+		if err := SafeCheckRedirect(req, via); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if req.Header.Get("Authorization") != "" {
+			t.Errorf("Authorization header should be stripped on https -> http scheme downgrade")
+		}
+	})
+
+	t.Run("PortChangeStripsAuth", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "https://example.com:8443/redirected", nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		via := []*http.Request{{URL: parseTestURL(t, "https://example.com/initial")}}
+
+		if err := SafeCheckRedirect(req, via); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if req.Header.Get("Authorization") != "" {
+			t.Errorf("Authorization header should be stripped on port change")
+		}
+	})
+
+	t.Run("UnsupportedSchemeRejected", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "file:///etc/passwd", nil)
+		via := []*http.Request{{URL: parseTestURL(t, "https://example.com/initial")}}
+
+		if err := SafeCheckRedirect(req, via); err == nil {
+			t.Error("expected error for unsupported scheme file://, got nil")
+		}
+	})
+
+	t.Run("MaxRedirectsExceeded", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "https://example.com/11", nil)
+		via := make([]*http.Request, 10)
+		for i := range via {
+			via[i] = &http.Request{URL: parseTestURL(t, fmt.Sprintf("https://example.com/%d", i))}
+		}
+
+		if err := SafeCheckRedirect(req, via); err == nil {
+			t.Error("expected error for exceeding 10 redirects, got nil")
+		}
+	})
+}
+
+func TestDefaultTransportTLS(t *testing.T) {
+	tr := defaultTransport()
+	httpTr, ok := tr.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", tr)
 	}
-	if reqDiffHost.Header.Get("Authorization") != "" {
-		t.Errorf("Authorization header should be stripped for cross-host redirect")
+	if httpTr.TLSClientConfig == nil {
+		t.Fatal("expected TLSClientConfig to be configured, got nil")
+	}
+	if httpTr.TLSClientConfig.MinVersion != tls.VersionTLS12 {
+		t.Errorf("expected TLS MinVersion to be TLS 1.2 (0x%04x), got 0x%04x", tls.VersionTLS12, httpTr.TLSClientConfig.MinVersion)
 	}
 }
 

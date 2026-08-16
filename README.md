@@ -117,12 +117,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version: "stable"
 
       - name: Install GoMajor
         run: go install github.com/chimanjain/gomajor@latest

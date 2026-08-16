@@ -6,7 +6,7 @@ all: build test
 
 build:
 	@echo "==> Building gomajor..."
-	go build -o $(BINARY_NAME)
+	go build -o $(BINARY_NAME) ./cmd/gomajor
 
 test:
 	@echo "==> Running tests..."
