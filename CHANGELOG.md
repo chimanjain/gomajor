@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [1.10.0] - 2026-08-16
+
+### Added
+
+- **Source Provider Abstraction**: Introduced the `source.Provider` interface (`Name`, `Type`, `Parse`) with `LocalProvider` and `GitHubProvider` implementations, enabling pluggable and extensible `go.mod` source resolution for the engine.
+- **Dedicated Domain Model Package**: Extracted core data structures into a dedicated `pkg/model` package, decoupling business models from engine execution logic.
+- **Runtime Dependency Isolation**: Added a dedicated `Runtime` context to manage execution state (clients, HTTP handlers, output streams), cleanly separating runtime dependencies from static `config.Config` settings.
+
+### Changed
+
+- **Standard Go Project Layout**: Reorganized the application structure by moving the main executable entrypoint to `cmd/gomajor/main.go` and internal helpers to `internal/goenv`.
+- **Hardened URL & Credential Sanitization**: Upgraded `SanitizeURL` to detect and redact credentials across arbitrary text and error strings, adding support for schemeless `user:pass@host` patterns and expanding sensitive parameter matching (`jwt`, `sig`, `bearer`, `session`, `credential`).
+- **Formatter & Stream Modernization**: Refactored output formatters (`TableFormatter`, `JSONFormatter`, `YAMLFormatter`) to operate over generic `io.Writer` streams with unified model structures.
+
+---
+
 ## [1.9.0] - 2026-08-03
 
 ### Added

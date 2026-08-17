@@ -18,7 +18,7 @@ import (
 )
 
 // Version is the current version of gomajor.
-const Version = "v1.10.0"
+const Version = "v1.11.0"
 
 func NewRootCmd() *cobra.Command {
 	cmd := &cobra.Command{

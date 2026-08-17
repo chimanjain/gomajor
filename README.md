@@ -33,12 +33,12 @@ Standard commands like `go list -m -u all` are great for finding minor updates, 
 
 ```bash
 # Install instantly
-go install github.com/chimanjain/gomajor@latest
+go install github.com/chimanjain/gomajor/cmd/gomajor@latest
 ```
 
 ```bash
 # Or build from source
-git clone https://github.com/chimanjain/gomajor.git && cd gomajor && go build -o gomajor
+git clone https://github.com/chimanjain/gomajor.git && cd gomajor && go build -o gomajor ./cmd/gomajor
 ```
 
 ### Basic CLI Usage
@@ -125,7 +125,7 @@ jobs:
           go-version: "stable"
 
       - name: Install GoMajor
-        run: go install github.com/chimanjain/gomajor@latest
+        run: go install github.com/chimanjain/gomajor/cmd/gomajor@latest
 
       - name: Run Dependency Audit
         run: gomajor

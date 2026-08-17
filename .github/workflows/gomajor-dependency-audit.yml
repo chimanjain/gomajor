@@ -18,7 +18,7 @@ jobs:
           go-version: "stable"
 
       - name: Install GoMajor
-        run: go install github.com/chimanjain/gomajor@latest
+        run: go install github.com/chimanjain/gomajor/cmd/gomajor@latest
 
       - name: Run Dependency Audit
         run: gomajor
