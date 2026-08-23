@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -274,13 +275,13 @@ require github.com/foo/bar v1.0.0
 				setup: func(_ *testing.T, dir string, serverURL string) (string, *config.Config, config.YAMLConfig) {
 					outputPath := filepath.Join(dir, "gomajor-report.yaml")
 					return "", &config.Config{
-							MaxProbe:    2,
-							GitHubRepos: []string{serverURL + "/owner/repo/main/go.mod"},
-							OutputPath:  outputPath,
-							Minor:       true,
-						}, config.YAMLConfig{
-							Github: []string{serverURL + "/owner/repo/main/go.mod"},
-						}
+						MaxProbe:    2,
+						GitHubRepos: []string{serverURL + "/owner/repo/main/go.mod"},
+						OutputPath:  outputPath,
+						Minor:       true,
+					}, config.YAMLConfig{
+						Github: []string{serverURL + "/owner/repo/main/go.mod"},
+					}
 				},
 				wantResultsLen: 1,
 				verify: func(t *testing.T, output format.YAMLOutput, _ string) {
@@ -388,6 +389,112 @@ require github.com/foo/baz v1.0.0
 
 				tt.verify(t, output, dir)
 			})
+		}
+	})
+
+	t.Run("DefaultsAndNilHandling", func(t *testing.T) {
+		// When rt is initialized with nil fields, runChecker should apply defaults safely
+		rt := &Runtime{}
+		err := runChecker(context.Background(), rt, true)
+		if err == nil {
+			t.Error("expected error resolving non-existent go.mod, got nil")
+		}
+	})
+
+	t.Run("NoColorRestoration", func(t *testing.T) {
+		dir := t.TempDir()
+		p := writeModFile(t, dir, "module example.com/test\ngo 1.21\n")
+
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+			rw.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		rt := &Runtime{
+			Config: &config.Config{
+				ModFilePath: p,
+				NoColor:     true,
+			},
+			Client: &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
+		}
+
+		err := runChecker(context.Background(), rt, true)
+		if err != nil {
+			t.Fatalf("runChecker failed: %v", err)
+		}
+	})
+
+	t.Run("StdoutJSONOutput", func(t *testing.T) {
+		dir := t.TempDir()
+		p := writeModFile(t, dir, "module example.com/test\ngo 1.21\nrequire github.com/foo/bar v1.0.0\n")
+
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
+				_ = json.NewEncoder(rw).Encode(map[string]string{versionKey: "v2.0.0"})
+				return
+			}
+			rw.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		var stdout bytes.Buffer
+		rt := &Runtime{
+			Config: &config.Config{
+				ModFilePath: p,
+				JSONOutput:  true,
+				OutputPath:  "",
+				MaxProbe:    2,
+			},
+			Client: &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
+			Out:    &stdout,
+		}
+
+		err := runChecker(context.Background(), rt, true)
+		if err != nil {
+			t.Fatalf("runChecker failed: %v", err)
+		}
+
+		var out format.YAMLOutput
+		if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+			t.Fatalf("failed to parse stdout JSON: %v", err)
+		}
+		if len(out.Results) != 1 {
+			t.Errorf("len(out.Results) = %d, want 1", len(out.Results))
+		}
+	})
+
+	t.Run("ProgressCallbackInvoked", func(t *testing.T) {
+		dir := t.TempDir()
+		p := writeModFile(t, dir, "module example.com/test\ngo 1.21\nrequire github.com/foo/bar v1.0.0\n")
+
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
+				_ = json.NewEncoder(rw).Encode(map[string]string{versionKey: "v2.0.0"})
+				return
+			}
+			rw.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		progressCalls := 0
+		rt := &Runtime{
+			Config: &config.Config{
+				ModFilePath: p,
+				MaxProbe:    2,
+			},
+			Client: &checker.Client{HTTPClient: server.Client(), ProxyBase: server.URL},
+			OnProgress: func(completed, total int) {
+				progressCalls++
+			},
+		}
+
+		err := runChecker(context.Background(), rt, true)
+		if err != nil {
+			t.Fatalf("runChecker failed: %v", err)
+		}
+
+		if progressCalls == 0 {
+			t.Error("expected OnProgress callback to be called at least once")
 		}
 	})
 }
