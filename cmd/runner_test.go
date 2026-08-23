@@ -275,13 +275,13 @@ require github.com/foo/bar v1.0.0
 				setup: func(_ *testing.T, dir string, serverURL string) (string, *config.Config, config.YAMLConfig) {
 					outputPath := filepath.Join(dir, "gomajor-report.yaml")
 					return "", &config.Config{
-							MaxProbe:    2,
-							GitHubRepos: []string{serverURL + "/owner/repo/main/go.mod"},
-							OutputPath:  outputPath,
-							Minor:       true,
-						}, config.YAMLConfig{
-							Github: []string{serverURL + "/owner/repo/main/go.mod"},
-						}
+						MaxProbe:    2,
+						GitHubRepos: []string{serverURL + "/owner/repo/main/go.mod"},
+						OutputPath:  outputPath,
+						Minor:       true,
+					}, config.YAMLConfig{
+						Github: []string{serverURL + "/owner/repo/main/go.mod"},
+					}
 				},
 				wantResultsLen: 1,
 				verify: func(t *testing.T, output format.YAMLOutput, _ string) {
