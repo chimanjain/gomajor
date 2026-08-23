@@ -1,6 +1,11 @@
 package source
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -92,24 +97,75 @@ func TestSanitizeURL(t *testing.T) {
 	}
 }
 
-func TestProviders(t *testing.T) {
-	t.Run("LocalProvider", func(t *testing.T) {
-		lp := NewLocalProvider("go.mod")
-		if lp.Name() != "go.mod" {
-			t.Errorf("lp.Name() = %q, want %q", lp.Name(), "go.mod")
+func TestParseLocalMod(t *testing.T) {
+	t.Run("ValidFile", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "go.mod")
+		content := "module example.com/test\n\ngo 1.21\n\nrequire github.com/foo/bar v1.0.0\n"
+		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
 		}
-		if lp.Type() != Local {
-			t.Errorf("lp.Type() = %q, want %q", lp.Type(), Local)
+
+		ps, err := ParseLocalMod(p)
+		if err != nil {
+			t.Fatalf("ParseLocalMod failed: %v", err)
+		}
+		if ps.Source != p || ps.SourceType != Local {
+			t.Errorf("unexpected parsed source: %+v", ps)
+		}
+		if len(ps.Reqs) != 1 || ps.Reqs[0].Mod.Path != "github.com/foo/bar" {
+			t.Errorf("unexpected requirements: %+v", ps.Reqs)
 		}
 	})
 
-	t.Run("GitHubProvider", func(t *testing.T) {
-		gp := NewGitHubProvider("owner/repo")
-		if gp.Name() != "owner/repo" {
-			t.Errorf("gp.Name() = %q, want %q", gp.Name(), "owner/repo")
+	t.Run("NonExistentFile", func(t *testing.T) {
+		_, err := ParseLocalMod("/nonexistent/path/go.mod")
+		if err == nil {
+			t.Error("expected error for non-existent file, got nil")
 		}
-		if gp.Type() != GitHub {
-			t.Errorf("gp.Type() = %q, want %q", gp.Type(), GitHub)
+	})
+}
+
+func TestProviderParse(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "go.mod")
+	content := "module example.com/test\n\ngo 1.21\n\nrequire github.com/foo/bar v1.0.0\n"
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("GitHubProvider_Parse", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			_, _ = rw.Write([]byte(content))
+		}))
+		defer server.Close()
+
+		gp := NewGitHubProvider(server.URL + "/go.mod")
+		ps, err := gp.Parse(context.Background(), server.Client())
+		if err != nil {
+			t.Fatalf("gp.Parse failed: %v", err)
+		}
+		if ps.SourceType != GitHub || len(ps.Reqs) != 1 {
+			t.Errorf("unexpected result: %+v", ps)
+		}
+	})
+
+	t.Run("GitHubProvider_ParseWithResolver", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			_, _ = rw.Write([]byte(content))
+		}))
+		defer server.Close()
+
+		gp := GitHubProvider{
+			PathOrURL:   "owner/repo",
+			URLResolver: func(string) []string { return []string{server.URL + "/go.mod"} },
+		}
+		ps, err := gp.Parse(context.Background(), server.Client())
+		if err != nil {
+			t.Fatalf("gp.Parse with resolver failed: %v", err)
+		}
+		if ps.SourceType != GitHub || len(ps.Reqs) != 1 {
+			t.Errorf("unexpected result: %+v", ps)
 		}
 	})
 }

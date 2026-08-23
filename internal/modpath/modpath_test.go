@@ -53,6 +53,8 @@ func TestNextMajorPath(t *testing.T) {
 		{"Standard", testUserGoModule, 3, "/", testUserGoModuleV3},
 		{"Standard v1", testUserGoModule, 1, "/", testUserGoModule},
 		{"Gopkg.in", testYamlGopkg, 3, ".", "gopkg.in/yaml.v3"},
+		{"Gopkg.in v0", testYamlGopkg, 0, ".", "gopkg.in/yaml.v0"},
+		{"Gopkg.in v1", testYamlGopkg, 1, ".", "gopkg.in/yaml.v1"},
 		{"DefaultSep", testUserGoModule, 3, "", testUserGoModuleV3},
 	}
 
