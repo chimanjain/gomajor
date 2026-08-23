@@ -81,3 +81,10 @@ func TestIsValidGoEnvKey(t *testing.T) {
 		}
 	}
 }
+
+func TestExecCommandGoEnv_InvalidKey(t *testing.T) {
+	_, err := execCommandGoEnv("invalid;key")
+	if err == nil {
+		t.Error("expected error for invalid go env key, got nil")
+	}
+}

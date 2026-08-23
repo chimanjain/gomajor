@@ -199,3 +199,175 @@ func TestWriteReport_Symlink(t *testing.T) {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }
+
+func TestWriteReport_Errors(t *testing.T) {
+	t.Run("InvalidDirectory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		// Create a regular file and then try to use it as a directory parent
+		blockingFile := filepath.Join(tmpDir, "blocking")
+		if err := os.WriteFile(blockingFile, []byte("file"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		badPath := filepath.Join(blockingFile, "subdir", "report.json")
+
+		err := WriteReport(io.Discard, badPath, true, nil)
+		if err == nil {
+			t.Error("expected error when directory creation fails, got nil")
+		}
+	})
+}
+
+func TestPrintAnalysisHeader(t *testing.T) {
+	t.Run("NilWriter", func(_ *testing.T) {
+		// Should not panic on nil writer
+		PrintAnalysisHeader(nil, 5, false, "go.mod")
+	})
+
+	t.Run("DirectDependencies", func(t *testing.T) {
+		var buf bytes.Buffer
+		PrintAnalysisHeader(&buf, 10, false, "go.mod")
+		out := buf.String()
+		if !strings.Contains(out, "Analyzing 10 direct dependencies") {
+			t.Errorf("unexpected output: %s", out)
+		}
+		if !strings.Contains(out, "go.mod") {
+			t.Errorf("expected path in output: %s", out)
+		}
+	})
+
+	t.Run("AllDependencies", func(t *testing.T) {
+		var buf bytes.Buffer
+		PrintAnalysisHeader(&buf, 20, true, "sub/go.mod")
+		out := buf.String()
+		if !strings.Contains(out, "Analyzing 20 dependencies (direct and indirect)") {
+			t.Errorf("unexpected output: %s", out)
+		}
+	})
+}
+
+func TestPrintTextResults(t *testing.T) {
+	t.Run("SingleMode_EmptyResults", func(t *testing.T) {
+		var buf bytes.Buffer
+		PrintTextResults(&buf, nil, true, false)
+		if buf.Len() != 0 {
+			t.Errorf("expected empty output, got: %q", buf.String())
+		}
+	})
+
+	t.Run("SingleMode_ZeroDependencies", func(t *testing.T) {
+		var buf bytes.Buffer
+		results := []model.SourceResult{
+			{
+				Source:       "go.mod",
+				SourceType:   source.Local,
+				Dependencies: nil,
+			},
+		}
+		PrintTextResults(&buf, results, true, false)
+		if !strings.Contains(buf.String(), "No matching dependencies found in go.mod") {
+			t.Errorf("unexpected output: %q", buf.String())
+		}
+	})
+
+	t.Run("SingleMode_AllUpToDate_MinorEnabled", func(t *testing.T) {
+		var buf bytes.Buffer
+		results := []model.SourceResult{
+			{
+				Source:     "go.mod",
+				SourceType: source.Local,
+				Dependencies: []model.DependencyInfo{
+					{
+						Module:         "github.com/foo/bar",
+						CurrentVersion: "v1.0.0",
+						HasUpdate:      false,
+						HasMinorUpdate: false,
+					},
+				},
+			},
+		}
+		PrintTextResults(&buf, results, true, false)
+		if !strings.Contains(buf.String(), "All checked dependencies are up to date") {
+			t.Errorf("unexpected output: %q", buf.String())
+		}
+	})
+
+	t.Run("SingleMode_AllUpToDate_MinorDisabled", func(t *testing.T) {
+		var buf bytes.Buffer
+		results := []model.SourceResult{
+			{
+				Source:     "go.mod",
+				SourceType: source.Local,
+				Dependencies: []model.DependencyInfo{
+					{
+						Module:         "github.com/foo/bar",
+						CurrentVersion: "v1.0.0",
+						HasUpdate:      false,
+						HasMinorUpdate: false,
+					},
+				},
+			},
+		}
+		PrintTextResults(&buf, results, true, true)
+		if !strings.Contains(buf.String(), "All checked dependencies are on their latest major versions") {
+			t.Errorf("unexpected output: %q", buf.String())
+		}
+	})
+
+	t.Run("SingleMode_WithUpdates", func(t *testing.T) {
+		var buf bytes.Buffer
+		results := []model.SourceResult{
+			{
+				Source:     "go.mod",
+				SourceType: source.Local,
+				Dependencies: []model.DependencyInfo{
+					{
+						Module:             "github.com/foo/bar/v2",
+						CurrentVersion:     "v2.0.0",
+						LatestMajorVersion: "v3.0.0",
+						LatestMajorPath:    "github.com/foo/bar/v3",
+						HasUpdate:          true,
+						LatestMinorVersion: "v2.1.0",
+						HasMinorUpdate:     true,
+					},
+				},
+			},
+		}
+		PrintTextResults(&buf, results, true, false)
+		out := buf.String()
+		if !strings.Contains(out, "MODULE") || !strings.Contains(out, "github.com/foo/bar") {
+			t.Errorf("unexpected output: %q", out)
+		}
+	})
+
+	t.Run("MultiMode_MultipleSources", func(t *testing.T) {
+		var buf bytes.Buffer
+		results := []model.SourceResult{
+			{
+				Source:       "local/go.mod",
+				SourceType:   source.Local,
+				Dependencies: nil,
+			},
+			{
+				Source:     "https://github.com/owner/repo",
+				SourceType: source.GitHub,
+				Dependencies: []model.DependencyInfo{
+					{
+						Module:             "github.com/foo/baz",
+						CurrentVersion:     "v1.0.0",
+						LatestMajorVersion: "v2.0.0",
+						LatestMajorPath:    "github.com/foo/baz/v2",
+						HasUpdate:          true,
+					},
+				},
+			},
+		}
+		PrintTextResults(&buf, results, false, false)
+		out := buf.String()
+		if !strings.Contains(out, "local/go.mod") || !strings.Contains(out, "No matching dependencies found.") {
+			t.Errorf("expected local source with no deps in output: %q", out)
+		}
+		if !strings.Contains(out, "github.com/owner/repo") || !strings.Contains(out, "github.com/foo/baz") {
+			t.Errorf("expected github source with updates in output: %q", out)
+		}
+	})
+}

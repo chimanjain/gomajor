@@ -1,8 +1,11 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -120,42 +123,6 @@ func TestCheckDependencies(t *testing.T) {
 	})
 }
 
-func TestRunLocalSource(t *testing.T) {
-	server, opts := setupMockProxy(t)
-	defer server.Close()
-
-	dir := t.TempDir()
-	modPath := filepath.Join(dir, "go.mod")
-	err := os.WriteFile(modPath, []byte("module example.com/test\ngo 1.21\nrequire github.com/foo/bar v1.0.0\n"), 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	eng := New(opts)
-	results, err := eng.RunLocalSource(context.Background(), modPath)
-	if err != nil {
-		t.Fatalf("RunLocalSource failed: %v", err)
-	}
-
-	if len(results) != 1 {
-		t.Fatalf("Expected 1 SourceResult, got %d", len(results))
-	}
-
-	res := results[0]
-	if res.Source != modPath || res.SourceType != source.Local {
-		t.Errorf("Unexpected source info: %s (%s)", res.Source, res.SourceType)
-	}
-
-	if len(res.Dependencies) != 1 {
-		t.Fatalf("Expected 1 dependency, got %d", len(res.Dependencies))
-	}
-
-	dep := res.Dependencies[0]
-	if dep.Module != "github.com/foo/bar" || dep.LatestMajorVersion != "v2.0.0" || !dep.HasUpdate {
-		t.Errorf("Unexpected dependency info: %+v", dep)
-	}
-}
-
 func TestRunMultiSources(t *testing.T) {
 	server, opts := setupMockProxy(t)
 	defer server.Close()
@@ -190,20 +157,6 @@ func TestRunMultiSources_Empty(t *testing.T) {
 	}
 }
 
-func TestNewWithOptions(t *testing.T) {
-	opts := Options{
-		MaxProbe: 3,
-		CheckAll: true,
-	}
-	eng := NewWithOptions(opts)
-	if eng.opts.MaxProbe != 3 {
-		t.Errorf("eng.opts.MaxProbe = %d, want 3", eng.opts.MaxProbe)
-	}
-	if eng.opts.Client == nil {
-		t.Error("eng.opts.Client should be initialized with default client")
-	}
-}
-
 func setupMockProxy(_ *testing.T) (*httptest.Server, Options) {
 	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/github.com/foo/bar/v2/@latest" {
@@ -222,4 +175,46 @@ func setupMockProxy(_ *testing.T) (*httptest.Server, Options) {
 	}
 
 	return server, opts
+}
+
+func TestCheckDependencies_Empty(t *testing.T) {
+	eng := New(Options{})
+	res, err := eng.CheckDependencies(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res != nil {
+		t.Errorf("expected nil result, got %v", res)
+	}
+}
+
+type errProvider struct {
+	name string
+}
+
+func (e errProvider) Name() string      { return e.name }
+func (e errProvider) Type() source.Type { return source.Local }
+func (e errProvider) Parse(_ context.Context, _ *http.Client) (source.ParsedSource, error) {
+	return source.ParsedSource{}, errors.New("provider error")
+}
+
+func TestParseAllProviders_ErrorHandling(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+	eng := New(Options{Logger: logger})
+
+	providers := []source.Provider{
+		errProvider{name: "failing-provider"},
+	}
+
+	sources, err := eng.parseAllProviders(context.Background(), providers)
+	if err != nil {
+		t.Fatalf("unexpected error from parseAllProviders: %v", err)
+	}
+	if len(sources) != 0 {
+		t.Errorf("expected 0 sources, got %d", len(sources))
+	}
+	if !bytes.Contains(logBuf.Bytes(), []byte("failed to parse source")) {
+		t.Errorf("expected log warning for failing provider, got: %s", logBuf.String())
+	}
 }

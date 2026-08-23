@@ -795,3 +795,16 @@ func parseTestURL(t *testing.T, s string) *url.URL {
 	}
 	return u
 }
+
+func TestClient_Close(t *testing.T) {
+	c := NewClient()
+	c.Close()
+}
+
+func TestFindLatestMajor_ZeroMaxProbe(t *testing.T) {
+	c := NewClient()
+	major, path, ver := c.FindLatestMajor(context.Background(), "github.com/foo/bar", 1, 0, "/")
+	if major != 1 || path != "github.com/foo/bar" || ver != "" {
+		t.Errorf("FindLatestMajor with maxProbe=0 returned unexpected (%d, %s, %s)", major, path, ver)
+	}
+}
