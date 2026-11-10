@@ -116,7 +116,7 @@ func ParseGithubMod(ctx context.Context, httpClient *http.Client, pathOrURL stri
 // SanitizeURL strips credentials (usernames, passwords, or tokens), sensitive query
 // parameters, and standalone authentication tokens from a URL or text containing URLs/errors.
 func SanitizeURL(raw string) string {
-	return sanitize.SanitizeURL(raw)
+	return sanitize.URL(raw)
 }
 
 // parseModContent parses the module content and extracts required dependencies.

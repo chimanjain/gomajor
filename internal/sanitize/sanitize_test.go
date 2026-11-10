@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-func TestSanitizeURL(t *testing.T) {
+func TestURL(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
@@ -64,9 +64,42 @@ func TestSanitizeURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := SanitizeURL(tt.input)
+			got := URL(tt.input)
 			if got != tt.expected {
-				t.Errorf("SanitizeURL(%q) = %q, want %q", tt.input, got, tt.expected)
+				t.Errorf("URL(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSingleURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "UserCredentials",
+			input:    "https://token:x-oauth-basic@github.com/owner/repo/go.mod",
+			expected: "https://redacted@github.com/owner/repo/go.mod",
+		},
+		{
+			name:     "CleanURL",
+			input:    "https://github.com/owner/repo/go.mod",
+			expected: "https://github.com/owner/repo/go.mod",
+		},
+		{
+			name:     "SensitiveParam",
+			input:    "https://github.com/owner/repo?token=ghp_secret123",
+			expected: "https://github.com/owner/repo?token=REDACTED",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := SingleURL(tt.input)
+			if got != tt.expected {
+				t.Errorf("SingleURL(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
 		})
 	}
@@ -116,11 +149,11 @@ func BenchmarkSanitizeTerminalString_CleanASCII(b *testing.B) {
 	}
 }
 
-func BenchmarkSanitizeURL_Clean(b *testing.B) {
+func BenchmarkURL_Clean(b *testing.B) {
 	u := "https://raw.githubusercontent.com/owner/repo/main/go.mod"
 	b.ResetTimer()
 	b.ReportAllocs()
 	for b.Loop() {
-		_ = SanitizeURL(u)
+		_ = URL(u)
 	}
 }

@@ -13,9 +13,9 @@ var (
 	authHeaderRegex         = regexp.MustCompile(`(?i)(bearer\s+|token\s+)[A-Za-z0-9_\-\.]{12,}`)
 )
 
-// SanitizeURL strips credentials (usernames, passwords, or tokens), sensitive query
+// URL strips credentials (usernames, passwords, or tokens), sensitive query
 // parameters, and standalone authentication tokens from a URL or text containing URLs/errors.
-func SanitizeURL(raw string) string {
+func URL(raw string) string {
 	if raw == "" {
 		return raw
 	}
@@ -38,7 +38,7 @@ func SanitizeURL(raw string) string {
 	sanitized := raw
 	// For general text (error messages, compound strings), find and sanitize all embedded URLs
 	if strings.Contains(sanitized, "http://") || strings.Contains(sanitized, "https://") {
-		sanitized = urlRegex.ReplaceAllStringFunc(sanitized, SanitizeSingleURL)
+		sanitized = urlRegex.ReplaceAllStringFunc(sanitized, SingleURL)
 	}
 
 	// Also redact any schemeless credentials: user:pass@host
@@ -60,8 +60,8 @@ func SanitizeURL(raw string) string {
 	return sanitized
 }
 
-// SanitizeSingleURL sanitizes a single parsed HTTP/HTTPS URL.
-func SanitizeSingleURL(raw string) string {
+// SingleURL sanitizes a single parsed HTTP/HTTPS URL.
+func SingleURL(raw string) string {
 	if !strings.Contains(raw, "@") && !strings.Contains(raw, "?") {
 		return raw
 	}
