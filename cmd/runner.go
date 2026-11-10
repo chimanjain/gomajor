@@ -9,12 +9,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/chimanjain/gomajor/pkg/checker"
 	"github.com/chimanjain/gomajor/pkg/config"
 	"github.com/chimanjain/gomajor/pkg/engine"
 	"github.com/chimanjain/gomajor/pkg/format"
 	"github.com/chimanjain/gomajor/pkg/model"
+	"github.com/chimanjain/gomajor/pkg/source"
 	"github.com/fatih/color"
 	"github.com/mattn/go-isatty"
 )
@@ -24,7 +26,6 @@ const jsonExt = ".json"
 // Runtime holds the parsed configuration and runtime dependencies (I/O, logger, HTTP clients).
 type Runtime struct {
 	Config           *config.Config
-	YAMLConfig       config.YAMLConfig
 	Client           checker.ModChecker
 	GitHubHTTPClient *http.Client
 	Out              io.Writer
@@ -59,8 +60,12 @@ func runChecker(ctx context.Context, rt *Runtime, singleMode bool) error {
 	// engine.RunMultiSources via normalizeSources. Pass raw values through.
 
 	if rt.Err == os.Stderr && isatty.IsTerminal(os.Stderr.Fd()) && !rt.Config.JSONOutput && rt.OnProgress == nil {
+		var mu sync.Mutex
+		prefix := color.HiBlackString("Checking dependencies...")
 		rt.OnProgress = func(completed, total int) {
-			fmt.Fprintf(rt.Err, "\r%s [%d/%d]", color.HiBlackString("Checking dependencies..."), completed, total)
+			mu.Lock()
+			defer mu.Unlock()
+			fmt.Fprintf(rt.Err, "\r%s [%d/%d]", prefix, completed, total)
 			if completed == total {
 				fmt.Fprintln(rt.Err)
 			}
@@ -79,37 +84,37 @@ func runChecker(ctx context.Context, rt *Runtime, singleMode bool) error {
 	var results []model.SourceResult
 	var err error
 	if singleMode {
-		results, err = executeSingleSource(ctx, eng, rt)
+		path := rt.Config.ModFilePath
+		if path == "" {
+			if path, err = resolveModFile(); err != nil {
+				return err
+			}
+		}
+		var parsed source.ParsedSource
+		if parsed, err = source.ParseLocalMod(path); err != nil {
+			return err
+		}
+		if !rt.Config.JSONOutput && rt.Config.OutputPath == "" {
+			count := 0
+			for _, req := range parsed.Reqs {
+				if rt.Config.CheckAll || !req.Indirect {
+					count++
+				}
+			}
+			format.PrintAnalysisHeader(rt.Out, count, rt.Config.CheckAll, path)
+		}
+		results, err = eng.RunParsedSources(ctx, []source.ParsedSource{parsed})
 	} else {
-		results, err = eng.RunMultiSources(ctx, rt.YAMLConfig)
+		results, err = eng.RunMultiSources(ctx, config.YAMLConfig{
+			Local:  rt.Config.LocalMods,
+			Github: rt.Config.GitHubRepos,
+		})
 	}
 	if err != nil {
 		return err
 	}
 
 	return writeOutput(rt, results, singleMode)
-}
-
-func executeSingleSource(ctx context.Context, eng *engine.Engine, rt *Runtime) ([]model.SourceResult, error) {
-	path := rt.Config.ModFilePath
-	if path == "" {
-		resolved, err := resolveModFile()
-		if err != nil {
-			return nil, err
-		}
-		path = resolved
-	}
-
-	results, err := eng.RunLocalSource(ctx, path)
-	if err != nil {
-		return nil, err
-	}
-
-	if !rt.Config.JSONOutput && rt.Config.OutputPath == "" && len(results) > 0 {
-		count := len(results[0].Dependencies)
-		format.PrintAnalysisHeader(rt.Out, count, rt.Config.CheckAll, path)
-	}
-	return results, nil
 }
 
 func writeOutput(rt *Runtime, results []model.SourceResult, singleMode bool) error {

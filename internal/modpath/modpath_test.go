@@ -10,6 +10,7 @@ const (
 )
 
 func TestParseModulePath(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		modPath   string
@@ -28,6 +29,7 @@ func TestParseModulePath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			gotBase, gotMajor, gotSep := ParseModulePath(tt.modPath)
 			if gotBase != tt.wantBase {
 				t.Errorf("ParseModulePath() gotBase = %v, want %v", gotBase, tt.wantBase)
@@ -43,6 +45,7 @@ func TestParseModulePath(t *testing.T) {
 }
 
 func TestNextMajorPath(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		basePath string
@@ -60,6 +63,7 @@ func TestNextMajorPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got := NextMajorPath(tt.basePath, tt.major, tt.sep); got != tt.want {
 				t.Errorf("NextMajorPath() = %v, want %v", got, tt.want)
 			}

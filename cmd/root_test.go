@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/chimanjain/gomajor/internal/testutil"
 	"github.com/chimanjain/gomajor/pkg/config"
-	"github.com/spf13/cobra"
 )
 
 func TestResolveModFile(t *testing.T) {
@@ -35,7 +36,7 @@ func TestResolveModFile(t *testing.T) {
 			dir := t.TempDir()
 
 			if tt.createMod {
-				writeModFile(t, dir, "module example.com/test\n\ngo 1.21\n")
+				testutil.WriteModFile(t, dir, "module example.com/test\n\ngo 1.21\n")
 			}
 
 			t.Chdir(dir)
@@ -55,133 +56,87 @@ func TestResolveModFile(t *testing.T) {
 	}
 }
 
+func parseTestCmd(t *testing.T, args []string) *config.Config {
+	t.Helper()
+	cmd := NewRootCmd()
+	if err := cmd.ParseFlags(args); err != nil {
+		t.Fatalf("ParseFlags: %v", err)
+	}
+	cfg, err := parseConfig(cmd)
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	return cfg
+}
+
 func TestRootCmd(t *testing.T) {
-	tests := []struct {
-		name      string
-		args      []string
-		parseOnly bool
-		checkFn   func(t *testing.T, cmd *cobra.Command, gotOutput string)
-	}{
-		{
-			name:      "Flags_Defaults",
-			parseOnly: true,
-			checkFn: func(t *testing.T, cmd *cobra.Command, _ string) {
-				cfg, _, err := parseConfig(cmd)
-				if err != nil {
-					t.Fatalf("parseConfig: %v", err)
-				}
+	t.Run("Flags", func(t *testing.T) {
+		tests := []struct {
+			name  string
+			args  []string
+			check func(t *testing.T, cfg *config.Config)
+		}{
+			{"Defaults", nil, func(t *testing.T, cfg *config.Config) {
 				if cfg.MaxProbe != 5 {
 					t.Errorf("MaxProbe = %v, want 5", cfg.MaxProbe)
 				}
-			},
-		},
-		{
-			name:      "Flags_MaxProbe_Capped",
-			args:      []string{"-m", "999"},
-			parseOnly: true,
-			checkFn: func(t *testing.T, cmd *cobra.Command, _ string) {
-				cfg, _, err := parseConfig(cmd)
-				if err != nil {
-					t.Fatalf("parseConfig: %v", err)
-				}
+			}},
+			{"MaxProbe_Capped", []string{"-m", "999"}, func(t *testing.T, cfg *config.Config) {
 				if cfg.MaxProbe != 50 {
 					t.Errorf("MaxProbe = %v, want 50 (capped)", cfg.MaxProbe)
 				}
-			},
-		},
-		{
-			name:      "Flags_Github_SingleRepo",
-			args:      []string{"-g", "owner/repo"},
-			parseOnly: true,
-			checkFn: func(t *testing.T, cmd *cobra.Command, _ string) {
-				cfg, _, err := parseConfig(cmd)
-				if err != nil {
-					t.Fatalf("parseConfig: %v", err)
+			}},
+			{"Github_SingleRepo", []string{"-g", "owner/repo"}, func(t *testing.T, cfg *config.Config) {
+				if !slices.Equal(cfg.GitHubRepos, []string{"owner/repo"}) {
+					t.Errorf("GitHubRepos = %v", cfg.GitHubRepos)
 				}
-				want := []string{"owner/repo"}
-				if !slices.Equal(cfg.GitHubRepos, want) {
-					t.Errorf("GitHubRepos = %v, want %v", cfg.GitHubRepos, want)
+			}},
+			{"Github_CommaSeparated", []string{"-g", "owner/repo1,github.com/owner/repo2"}, func(t *testing.T, cfg *config.Config) {
+				if !slices.Equal(cfg.GitHubRepos, []string{"owner/repo1", "github.com/owner/repo2"}) {
+					t.Errorf("GitHubRepos = %v", cfg.GitHubRepos)
 				}
-			},
-		},
-		{
-			name:      "Flags_Github_CommaSeparated",
-			args:      []string{"-g", "owner/repo1,github.com/owner/repo2"},
-			parseOnly: true,
-			checkFn: func(t *testing.T, cmd *cobra.Command, _ string) {
-				cfg, _, err := parseConfig(cmd)
-				if err != nil {
-					t.Fatalf("parseConfig: %v", err)
-				}
-				want := []string{"owner/repo1", "github.com/owner/repo2"}
-				if !slices.Equal(cfg.GitHubRepos, want) {
-					t.Errorf("GitHubRepos = %v, want %v", cfg.GitHubRepos, want)
-				}
-			},
-		},
-		{
-			name: "Version",
-			args: []string{"--version"},
-			checkFn: func(t *testing.T, _ *cobra.Command, got string) {
-				want := Version + "\n"
-				if got != want {
-					t.Errorf("got %q, want %q", got, want)
-				}
-			},
-		},
-		{
-			name: "Help",
-			args: []string{"--help"},
-			checkFn: func(t *testing.T, _ *cobra.Command, got string) {
-				if !strings.Contains(got, "A tool that parses a go.mod file") || !strings.Contains(got, "Usage:") {
-					t.Errorf("expected help output, got: %q", got)
-				}
-			},
-		},
-		{
-			name:      "Flags_Verbose",
-			args:      []string{"--verbose"},
-			parseOnly: true,
-			checkFn: func(t *testing.T, cmd *cobra.Command, _ string) {
-				cfg, _, err := parseConfig(cmd)
-				if err != nil {
-					t.Fatalf("parseConfig: %v", err)
-				}
+			}},
+			{"Verbose", []string{"--verbose"}, func(t *testing.T, cfg *config.Config) {
 				if !cfg.Verbose {
 					t.Errorf("Verbose = %v, want true", cfg.Verbose)
 				}
-			},
-		},
-	}
+			}},
+		}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			writeModFile(t, dir, "module example.com/test\ngo 1.21\n")
-			t.Chdir(dir)
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				cfg := parseTestCmd(t, tt.args)
+				tt.check(t, cfg)
+			})
+		}
+	})
 
-			cmd := NewRootCmd()
+	t.Run("Version", func(t *testing.T) {
+		cmd := NewRootCmd()
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		cmd.SetArgs([]string{"--version"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimRight(buf.String(), "\r\n") != Version {
+			t.Errorf("got %q, want %q", buf.String(), Version+"\n")
+		}
+	})
 
-			var buf bytes.Buffer
-			cmd.SetOut(&buf)
-			cmd.SetErr(&buf)
-
-			var err error
-			if tt.parseOnly {
-				err = cmd.ParseFlags(tt.args)
-			} else {
-				cmd.SetArgs(tt.args)
-				err = cmd.Execute()
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if tt.checkFn != nil {
-				tt.checkFn(t, cmd, buf.String())
-			}
-		})
-	}
+	t.Run("Help", func(t *testing.T) {
+		cmd := NewRootCmd()
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		cmd.SetArgs([]string{"--help"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		got := buf.String()
+		if !strings.Contains(got, "A tool that parses a go.mod file") || !strings.Contains(got, "Usage:") {
+			t.Errorf("expected help output, got: %q", got)
+		}
+	})
 }
 
 func TestConfigMerging(t *testing.T) {
@@ -193,6 +148,11 @@ func TestConfigMerging(t *testing.T) {
 minor: false
 major: false
 output: my-custom-report.json
+all: true
+max_probe: 12
+json: true
+no_color: true
+verbose: true
 `
 		if err := os.WriteFile("gomajor.yaml", []byte(configContent), 0o644); err != nil {
 			t.Fatalf("WriteFile: %v", err)
@@ -203,7 +163,7 @@ output: my-custom-report.json
 			t.Fatalf("ParseFlags: %v", err)
 		}
 
-		cfg, _, err := parseConfig(cmd)
+		cfg, err := parseConfig(cmd)
 		if err != nil {
 			t.Fatalf("parseConfig: %v", err)
 		}
@@ -217,6 +177,21 @@ output: my-custom-report.json
 		if cfg.OutputPath != "my-custom-report.json" {
 			t.Errorf("expected OutputPath to be my-custom-report.json (from YAML), got %s", cfg.OutputPath)
 		}
+		if !cfg.CheckAll {
+			t.Errorf("expected CheckAll to be true (from YAML), got false")
+		}
+		if cfg.MaxProbe != 12 {
+			t.Errorf("expected MaxProbe to be 12 (from YAML), got %d", cfg.MaxProbe)
+		}
+		if !cfg.JSONOutput {
+			t.Errorf("expected JSONOutput to be true (from YAML), got false")
+		}
+		if !cfg.NoColor {
+			t.Errorf("expected NoColor to be true (from YAML), got false")
+		}
+		if !cfg.Verbose {
+			t.Errorf("expected Verbose to be true (from YAML), got false")
+		}
 	})
 
 	t.Run("CLIOverridesYAML", func(t *testing.T) {
@@ -227,19 +202,22 @@ output: my-custom-report.json
 minor: false
 major: false
 output: my-custom-report.json
+all: true
+max_probe: 12
+no_color: true
 `
 		if err := os.WriteFile("gomajor.yaml", []byte(configContent), 0o644); err != nil {
 			t.Fatalf("WriteFile: %v", err)
 		}
 
 		cmd := NewRootCmd()
-		// Override minor and output in CLI flags
-		args := []string{"--minor=true", "--output=override.json"}
+		// Override minor, output, all, max-probe, and no-color in CLI flags
+		args := []string{"--minor=true", "--output=override.json", "--all=false", "--max-probe=7", "--no-color=false"}
 		if err := cmd.ParseFlags(args); err != nil {
 			t.Fatalf("ParseFlags: %v", err)
 		}
 
-		cfg, _, err := parseConfig(cmd)
+		cfg, err := parseConfig(cmd)
 		if err != nil {
 			t.Fatalf("parseConfig: %v", err)
 		}
@@ -253,6 +231,31 @@ output: my-custom-report.json
 		}
 		if cfg.OutputPath != "override.json" {
 			t.Errorf("expected OutputPath to be override.json (CLI override), got %s", cfg.OutputPath)
+		}
+		if cfg.CheckAll {
+			t.Errorf("expected CheckAll to be false (CLI override), got true")
+		}
+		if cfg.MaxProbe != 7 {
+			t.Errorf("expected MaxProbe to be 7 (CLI override), got %d", cfg.MaxProbe)
+		}
+		if cfg.NoColor {
+			t.Errorf("expected NoColor to be false (CLI override), got true")
+		}
+	})
+
+	t.Run("BothMinorAndMajorDisabled_Error", func(t *testing.T) {
+		dir := t.TempDir()
+		testutil.WriteModFile(t, dir, "module example.com/test\ngo 1.21\n")
+		t.Chdir(dir)
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"--minor=false", "--major=false"})
+		err := cmd.Execute()
+		if err == nil {
+			t.Fatal("expected error when both minor and major are disabled, got nil")
+		}
+		if !strings.Contains(err.Error(), "cannot disable both minor and major checks") {
+			t.Errorf("unexpected error message: %v", err)
 		}
 	})
 
@@ -274,7 +277,7 @@ local:
 			t.Fatalf("ParseFlags: %v", err)
 		}
 
-		cfg, yamlCfg, err := parseConfig(cmd)
+		cfg, err := parseConfig(cmd)
 		if err != nil {
 			t.Fatalf("parseConfig: %v", err)
 		}
@@ -285,7 +288,7 @@ local:
 		if cfg.ModFilePath != "custom/go.mod" {
 			t.Errorf("expected ModFilePath to be custom/go.mod, got %q", cfg.ModFilePath)
 		}
-		if !isSingleMode(cfg, yamlCfg) {
+		if !isSingleMode(cfg) {
 			t.Errorf("expected isSingleMode to be true when -f is passed without explicit -c")
 		}
 	})
@@ -297,7 +300,7 @@ local:
 			t.Fatalf("ParseFlags: %v", err)
 		}
 
-		_, _, err := parseConfig(cmd)
+		_, err := parseConfig(cmd)
 		if err == nil {
 			t.Error("expected error when explicit config file does not exist, got nil")
 		}
@@ -316,7 +319,7 @@ local:
 			t.Fatalf("ParseFlags: %v", err)
 		}
 
-		_, _, err := parseConfig(cmd)
+		_, err := parseConfig(cmd)
 		if err == nil {
 			t.Error("expected error for malformed YAML config, got nil")
 		}
@@ -328,7 +331,7 @@ local:
 		if err := cmdJSON.ParseFlags([]string{"-o", "", "--json"}); err != nil {
 			t.Fatal(err)
 		}
-		cfgJSON, _, err := parseConfig(cmdJSON)
+		cfgJSON, err := parseConfig(cmdJSON)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -341,7 +344,7 @@ local:
 		if err := cmdYAML.ParseFlags([]string{"-o", ""}); err != nil {
 			t.Fatal(err)
 		}
-		cfgYAML, _, err := parseConfig(cmdYAML)
+		cfgYAML, err := parseConfig(cmdYAML)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -366,6 +369,19 @@ func TestValidateConfigOutputPath(t *testing.T) {
 		{"DotDotDirect", "..", true},
 	}
 
+	if runtime.GOOS == "windows" {
+		winTests := []struct {
+			name    string
+			path    string
+			wantErr bool
+		}{
+			{"WindowsDriveAbsolute", `C:\report.json`, true},
+			{"WindowsDriveRelative", `C:report.json`, true},
+			{"WindowsRootRelative", `\report.json`, true},
+		}
+		tests = append(tests, winTests...)
+	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := validateConfigOutputPath(tt.path)
@@ -378,46 +394,35 @@ func TestValidateConfigOutputPath(t *testing.T) {
 
 func TestIsSingleMode(t *testing.T) {
 	tests := []struct {
-		name    string
-		cfg     *config.Config
-		yamlCfg config.YAMLConfig
-		want    bool
+		name string
+		cfg  *config.Config
+		want bool
 	}{
 		{
-			name:    "SingleLocal",
-			cfg:     &config.Config{},
-			yamlCfg: config.YAMLConfig{},
-			want:    true,
+			name: "SingleLocal",
+			cfg:  &config.Config{},
+			want: true,
 		},
 		{
-			name:    "HasConfigPath",
-			cfg:     &config.Config{ConfigPath: "gomajor.yaml"},
-			yamlCfg: config.YAMLConfig{},
-			want:    false,
+			name: "HasConfigPath",
+			cfg:  &config.Config{ConfigPath: "gomajor.yaml"},
+			want: false,
 		},
 		{
-			name:    "HasCliGithub",
-			cfg:     &config.Config{GitHubRepos: []string{"owner/repo"}},
-			yamlCfg: config.YAMLConfig{},
-			want:    false,
+			name: "HasCliGithub",
+			cfg:  &config.Config{GitHubRepos: []string{"owner/repo"}},
+			want: false,
 		},
 		{
-			name:    "HasYamlLocal",
-			cfg:     &config.Config{},
-			yamlCfg: config.YAMLConfig{Local: []string{"sub/go.mod"}},
-			want:    false,
-		},
-		{
-			name:    "HasYamlGithub",
-			cfg:     &config.Config{},
-			yamlCfg: config.YAMLConfig{Github: []string{"owner/repo"}},
-			want:    false,
+			name: "HasLocalMods",
+			cfg:  &config.Config{LocalMods: []string{"sub/go.mod"}},
+			want: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isSingleMode(tt.cfg, tt.yamlCfg)
+			got := isSingleMode(tt.cfg)
 			if got != tt.want {
 				t.Errorf("isSingleMode() = %t, want %t", got, tt.want)
 			}
@@ -425,11 +430,9 @@ func TestIsSingleMode(t *testing.T) {
 	}
 }
 
-func writeModFile(t *testing.T, dir, content string) string {
-	t.Helper()
-	p := filepath.Join(dir, "go.mod")
-	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
-		t.Fatalf("writeModFile: %v", err)
+func TestRootCmd_SilenceErrors(t *testing.T) {
+	cmd := NewRootCmd()
+	if !cmd.SilenceErrors {
+		t.Errorf("NewRootCmd() SilenceErrors = false, want true to prevent unsanitized error leaking")
 	}
-	return p
 }

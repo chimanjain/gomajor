@@ -1,16 +1,17 @@
 package source
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
-	"github.com/cenkalti/backoff/v7"
-	"github.com/chimanjain/gomajor/internal/goenv"
-	"github.com/chimanjain/gomajor/pkg/constants"
+	"github.com/chimanjain/gomajor/internal/retry"
+	"github.com/chimanjain/gomajor/pkg/config"
 )
 
 // FetchGithubMod retrieves a go.mod from a GitHub repository or URL using default URL resolution.
@@ -52,6 +53,7 @@ func FetchGithubModWithResolver(ctx context.Context, client *http.Client, pathOr
 	}
 
 	type fetchResult struct {
+		index   int
 		content []byte
 		url     string
 		err     error
@@ -61,26 +63,56 @@ func FetchGithubModWithResolver(ctx context.Context, client *http.Client, pathOr
 	defer cancel()
 
 	resChan := make(chan fetchResult, len(urls))
-	for _, u := range urls {
-		go func(targetURL string) {
+	for i, u := range urls {
+		go func(idx int, targetURL string) {
 			sendToken := token != "" && shouldSendToken(targetURL, tokenSourceHost)
 			content, err := fetchSingleURL(cCtx, client, targetURL, sendToken, token)
-			resChan <- fetchResult{content: content, url: targetURL, err: err}
-		}(u)
+			resChan <- fetchResult{index: idx, content: content, url: targetURL, err: err}
+		}(i, u)
 	}
 
+	finished := make([]bool, len(urls))
+	var bestResult fetchResult
+	bestSuccessIdx := -1
 	var lastErr error
+
 	for range len(urls) {
 		select {
 		case res := <-resChan:
+			finished[res.index] = true
 			if res.err == nil {
-				cancel()
-				return res.content, res.url, nil
+				if bestSuccessIdx == -1 || res.index < bestSuccessIdx {
+					bestSuccessIdx = res.index
+					bestResult = res
+				}
+			} else {
+				lastErr = res.err
 			}
-			lastErr = res.err
+
+			// If we have a successful candidate, check whether all higher-priority
+			// (lower-indexed) candidates have finished. If so, no higher-priority candidate
+			// can arrive, so we can commit to this result immediately.
+			if bestSuccessIdx != -1 {
+				higherPriorityPending := false
+				for j := 0; j < bestSuccessIdx; j++ {
+					if !finished[j] {
+						higherPriorityPending = true
+						break
+					}
+				}
+				if !higherPriorityPending {
+					cancel()
+					return bestResult.content, bestResult.url, nil
+				}
+			}
 		case <-ctx.Done():
 			return nil, "", ctx.Err()
 		}
+	}
+
+	if bestSuccessIdx != -1 {
+		cancel()
+		return bestResult.content, bestResult.url, nil
 	}
 
 	sanitizedUrls := make([]string, len(urls))
@@ -92,55 +124,52 @@ func FetchGithubModWithResolver(ctx context.Context, client *http.Client, pathOr
 }
 
 // getGithubRawURLs normalizes a GitHub path or URL into candidate raw URL(s).
+// It strictly validates that inputs are valid GitHub repositories or URLs,
+// returning nil for non-GitHub or invalid inputs to prevent SSRF.
 func getGithubRawURLs(input string) []string {
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return nil
 	}
 
-	if strings.Contains(input, "raw.githubusercontent.com") {
-		return []string{input}
-	}
-
-	// Shorthand formats (e.g. "owner/repo" or "github.com/owner/repo"):
-	if !strings.HasPrefix(input, "http://") && !strings.HasPrefix(input, "https://") {
-		trimmed := strings.TrimPrefix(input, "github.com/")
-		trimmed = strings.TrimSuffix(trimmed, "/")
-		parts := strings.Split(trimmed, "/")
-		if len(parts) >= 2 {
-			owner := parts[0]
-			repo := strings.TrimSuffix(parts[1], ".git")
-			return []string{
-				fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/go.mod", owner, repo),
-				fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/go.mod", owner, repo),
-			}
+	if strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://") {
+		u, err := url.Parse(input)
+		if err != nil || !isTrustedGitHubHost(input) {
+			return nil
 		}
-		return []string{input}
+
+		if strings.Contains(u.Host, "raw.githubusercontent.com") {
+			return []string{input}
+		}
+
+		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+		if len(parts) >= 2 && parts[0] != "" {
+			owner, repo := parts[0], strings.TrimSuffix(parts[1], ".git")
+			if len(parts) >= 5 && parts[2] == "blob" {
+				return []string{fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", owner, repo, parts[3], strings.Join(parts[4:], "/"))}
+			}
+			return rawModCandidates(owner, repo)
+		}
+		return nil
 	}
 
-	// Full URLs (e.g. https://github.com/owner/repo):
-	u, err := url.Parse(input)
-	if err == nil && u.Scheme != "" && u.Host != "" {
-		if strings.Contains(u.Host, "github.com") {
-			trimmedPath := strings.TrimPrefix(strings.TrimSuffix(u.Path, "/"), "/")
-			parts := strings.Split(trimmedPath, "/")
-			if len(parts) >= 2 {
-				owner := parts[0]
-				repo := strings.TrimSuffix(parts[1], ".git")
-				if len(parts) >= 5 && parts[2] == "blob" {
-					branch := parts[3]
-					path := strings.Join(parts[4:], "/")
-					return []string{fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", owner, repo, branch, path)}
-				}
-				return []string{
-					fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/go.mod", owner, repo),
-					fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/go.mod", owner, repo),
-				}
-			}
+	trimmed := strings.TrimPrefix(strings.Trim(input, "/"), "github.com/")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+		owner, repo := parts[0], strings.TrimSuffix(parts[1], ".git")
+		if !strings.ContainsAny(owner, " \t\n\r/\\:@?#") && !strings.ContainsAny(repo, " \t\n\r/\\:@?#") {
+			return rawModCandidates(owner, repo)
 		}
 	}
 
-	return []string{input}
+	return nil
+}
+
+func rawModCandidates(owner, repo string) []string {
+	return []string{
+		fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/go.mod", owner, repo),
+		fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/go.mod", owner, repo),
+	}
 }
 
 // parseGithubModWithResolver parses GitHub mod content using a custom URL resolver function.
@@ -153,7 +182,7 @@ func parseGithubModWithResolver(ctx context.Context, httpClient *http.Client, pa
 }
 
 // resolveGithubToken extracts a token from the URL user-info field, falling
-// back to the GITHUB_TOKEN and GITHUB_PAT environment variables.
+// back to the GITHUB_TOKEN, GH_TOKEN, and GITHUB_PAT environment variables.
 func resolveGithubToken(u *url.URL) string {
 	if u != nil && u.User != nil {
 		if passwd, ok := u.User.Password(); ok {
@@ -161,10 +190,7 @@ func resolveGithubToken(u *url.URL) string {
 		}
 		return u.User.Username()
 	}
-	if t := goenv.Get("GITHUB_TOKEN"); t != "" {
-		return t
-	}
-	return goenv.Get("GITHUB_PAT")
+	return cmp.Or(os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN"), os.Getenv("GITHUB_PAT"))
 }
 
 // resolveTokenHost returns the hostname that a URL-embedded token was scoped to.
@@ -189,10 +215,19 @@ func isTrustedGitHubHost(targetURL string) bool {
 }
 
 // shouldSendToken determines whether the authentication token should be sent to targetURL.
-// Scoped tokens (from URL user-info) are sent only to the host in targetURL matching tokenSourceHost.
+// Tokens are strictly transmitted over HTTPS.
+// Scoped tokens (from URL user-info) are sent only to the host in targetURL matching tokenSourceHost,
+// or between trusted GitHub hosts (e.g. github.com and raw.githubusercontent.com).
 // Global environment tokens (tokenSourceHost == "") are restricted strictly to trusted GitHub domains.
 func shouldSendToken(targetURL, tokenSourceHost string) bool {
+	u, err := url.Parse(targetURL)
+	if err != nil || !strings.EqualFold(u.Scheme, "https") {
+		return false
+	}
 	if tokenSourceHost != "" {
+		if isTrustedGitHubHost("https://"+tokenSourceHost) && isTrustedGitHubHost(targetURL) {
+			return true
+		}
 		return urlHostMatches(targetURL, tokenSourceHost)
 	}
 	return isTrustedGitHubHost(targetURL)
@@ -205,44 +240,68 @@ func urlHostMatches(targetURL, wantHost string) bool {
 }
 
 func fetchSingleURL(ctx context.Context, client *http.Client, u string, sendToken bool, token string) ([]byte, error) {
-	b := backoff.NewExponentialBackOff()
-	b.InitialInterval = constants.HTTPRetryInitialDelay
+	if client == nil {
+		client = http.DefaultClient
+	}
 
-	maxTries := max(uint(constants.HTTPMaxRetries), 1)
-
-	operation := func() ([]byte, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	doFetch := func(withAuth bool) ([]byte, int, error) {
+		baseReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		if err != nil {
-			return nil, backoff.Permanent(err)
+			return nil, 0, err
 		}
 
-		if sendToken && token != "" {
+		if withAuth && sendToken && token != "" {
 			if strings.Contains(token, " ") {
-				req.Header.Set("Authorization", token)
+				baseReq.Header.Set("Authorization", token)
 			} else {
-				req.Header.Set("Authorization", "token "+token)
+				baseReq.Header.Set("Authorization", "token "+token)
 			}
 		}
 
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		defer func() {
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-			_ = resp.Body.Close()
-		}()
+		var lastStatus int
+		operation := func() ([]byte, error) {
+			req := baseReq.Clone(ctx)
 
-		if resp.StatusCode == http.StatusOK {
-			return io.ReadAll(io.LimitReader(resp.Body, constants.GitHubModMaxBytes))
+			resp, err := client.Do(req)
+			if err != nil {
+				return nil, err
+			}
+			defer func() {
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+				_ = resp.Body.Close()
+			}()
+
+			lastStatus = resp.StatusCode
+			if resp.StatusCode == http.StatusOK {
+				return io.ReadAll(io.LimitReader(resp.Body, config.GitHubModMaxBytes))
+			}
+
+			errStatus := fmt.Errorf("HTTP status %d: %s", resp.StatusCode, resp.Status)
+			if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode < 500 {
+				return nil, retry.Permanent(errStatus)
+			}
+			return nil, errStatus
 		}
 
-		errStatus := fmt.Errorf("HTTP status %d: %s", resp.StatusCode, resp.Status)
-		if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode < 500 {
-			return nil, backoff.Permanent(errStatus)
-		}
-		return nil, errStatus
+		body, err := retry.Do(ctx, uint(config.HTTPMaxRetries), config.HTTPRetryInitialDelay, operation)
+		return body, lastStatus, err
 	}
 
-	return backoff.Retry(ctx, operation, backoff.WithBackOff(b), backoff.WithMaxTries(maxTries))
+	// Attempt unauthenticated request first to avoid transmitting credentials on
+	// public repositories. If the unauthenticated request returns 401 Unauthorized
+	// or 404 Not Found (private repo), retry with authentication.
+	if sendToken && token != "" {
+		body, status, err := doFetch(false)
+		if err == nil {
+			return body, nil
+		}
+		if status == http.StatusUnauthorized || status == http.StatusNotFound {
+			bodyAuth, _, errAuth := doFetch(true)
+			return bodyAuth, errAuth
+		}
+		return nil, err
+	}
+
+	body, _, err := doFetch(false)
+	return body, err
 }

@@ -2,8 +2,8 @@
 package goenv
 
 import (
+	"bytes"
 	"context"
-	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -42,8 +42,25 @@ func ClearCache() {
 	envCache.Clear()
 }
 
+func execCommandGoEnv(key string) (string, error) {
+	if !isValidGoEnvKey(key) {
+		return "", os.ErrInvalid
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "go", "env", key)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out.String()), nil
+}
+
 func isValidGoEnvKey(key string) bool {
-	if len(key) == 0 {
+	if key == "" {
 		return false
 	}
 	for _, r := range key {
@@ -52,18 +69,4 @@ func isValidGoEnvKey(key string) bool {
 		}
 	}
 	return true
-}
-
-func execCommandGoEnv(key string) (string, error) {
-	if !isValidGoEnvKey(key) {
-		return "", fmt.Errorf("invalid go env key: %q", key)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "go", "env", key)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
 }
