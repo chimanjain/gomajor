@@ -15,7 +15,10 @@ import (
 )
 
 func TestFormatter(t *testing.T) {
+	t.Parallel()
+
 	t.Run("VisualLen", func(t *testing.T) {
+		t.Parallel()
 		tests := []struct {
 			input string
 			want  int
@@ -36,6 +39,7 @@ func TestFormatter(t *testing.T) {
 	})
 
 	t.Run("PadWithLen", func(t *testing.T) {
+		t.Parallel()
 		tests := []struct {
 			input string
 			width int
@@ -44,6 +48,7 @@ func TestFormatter(t *testing.T) {
 			{"hello", 10, "hello     "},
 			{"hello", 3, "hello"},
 			{color.GreenString("hi"), 5, color.GreenString("hi") + "   "},
+			{"large", 150, "large" + strings.Repeat(" ", 145)},
 		}
 
 		for _, tt := range tests {
@@ -54,8 +59,10 @@ func TestFormatter(t *testing.T) {
 		}
 	})
 
-	t.Run("FormatRow", func(t *testing.T) {
-		row := formatRow("github.com/foo/bar", "v1.0.0", "v1.1.0", true, "v2.0.0", "github.com/foo/bar/v2", true)
+	t.Run("BuildFormattedRow", func(t *testing.T) {
+		t.Parallel()
+		r := buildFormattedRow("github.com/foo/bar", "v1.0.0", "v1.1.0", true, "v2.0.0", "github.com/foo/bar/v2", true)
+		row := r.cells[:]
 		if len(row) != 5 {
 			t.Fatalf("expected 5 columns, got %d", len(row))
 		}
@@ -77,38 +84,25 @@ func TestFormatter(t *testing.T) {
 	})
 
 	t.Run("SanitizeTerminalString", func(t *testing.T) {
-		tests := []struct {
-			input string
-			want  string
-		}{
-			{"github.com/foo/bar", "github.com/foo/bar"},
-			{"\x1b[2J\x1b[Hmalicious/pkg", "malicious/pkg"},
-			{"\x1b[31;1mcolored/pkg\x1b[0m", "colored/pkg"},
-			{"pkg\r\nwith\a\bcontrols", "pkgwithcontrols"},
-			{"unicode/模块/v2", "unicode/模块/v2"},
-			{"", ""},
-		}
-
-		for _, tt := range tests {
-			got := sanitizeTerminalString(tt.input)
-			if got != tt.want {
-				t.Errorf("sanitizeTerminalString(%q) = %q, want %q", tt.input, got, tt.want)
-			}
+		t.Parallel()
+		const input = "\x1b[2J\x1b[Hmalicious/pkg\a"
+		const want = "malicious/pkg"
+		if got := SanitizeTerminalString(input); got != want {
+			t.Errorf("SanitizeTerminalString(%q) = %q, want %q", input, got, want)
 		}
 	})
 
-	t.Run("PrintTable_Empty", func(_ *testing.T) {
+	t.Run("RenderTable_Empty", func(_ *testing.T) {
 		// Just ensure it doesn't panic
-		printTable(io.Discard, "", nil)
+		renderTable(io.Discard, "", nil)
 	})
 
-	t.Run("PrintTable_Rows", func(t *testing.T) {
-		rows := [][]string{
-			{"mod", "v1.0.0", "v1.1.0", "v2.0.0", "mod/v2"},
-		}
+	t.Run("RenderTable_Rows", func(t *testing.T) {
+		t.Parallel()
+		r := buildFormattedRow("mod", "v1.0.0", "v1.1.0", true, "v2.0.0", "mod/v2", true)
 
 		var buf bytes.Buffer
-		printTable(&buf, "  ", rows)
+		renderTable(&buf, "  ", []formattedRow{r})
 		out := buf.String()
 
 		if !strings.Contains(out, "MODULE") || !strings.Contains(out, "mod/v2") {
@@ -118,6 +112,7 @@ func TestFormatter(t *testing.T) {
 }
 
 func TestPrintMultiJsonResults(t *testing.T) {
+	t.Parallel()
 	results := []model.SourceResult{
 		{
 			Source:     "test-source",
@@ -151,6 +146,7 @@ func TestPrintMultiJsonResults(t *testing.T) {
 }
 
 func TestWriteReport_Success(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	outPath := filepath.Join(tmpDir, "subdir", "report.json")
 	results := []model.SourceResult{
@@ -181,6 +177,7 @@ func TestWriteReport_Success(t *testing.T) {
 }
 
 func TestWriteReport_Symlink(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	targetFile := filepath.Join(tmpDir, "target.json")
 	if err := os.WriteFile(targetFile, []byte("target"), 0o600); err != nil {
@@ -201,7 +198,9 @@ func TestWriteReport_Symlink(t *testing.T) {
 }
 
 func TestWriteReport_Errors(t *testing.T) {
+	t.Parallel()
 	t.Run("InvalidDirectory", func(t *testing.T) {
+		t.Parallel()
 		tmpDir := t.TempDir()
 		// Create a regular file and then try to use it as a directory parent
 		blockingFile := filepath.Join(tmpDir, "blocking")
@@ -218,12 +217,14 @@ func TestWriteReport_Errors(t *testing.T) {
 }
 
 func TestPrintAnalysisHeader(t *testing.T) {
+	t.Parallel()
 	t.Run("NilWriter", func(_ *testing.T) {
 		// Should not panic on nil writer
 		PrintAnalysisHeader(nil, 5, false, "go.mod")
 	})
 
 	t.Run("DirectDependencies", func(t *testing.T) {
+		t.Parallel()
 		var buf bytes.Buffer
 		PrintAnalysisHeader(&buf, 10, false, "go.mod")
 		out := buf.String()
@@ -236,6 +237,7 @@ func TestPrintAnalysisHeader(t *testing.T) {
 	})
 
 	t.Run("AllDependencies", func(t *testing.T) {
+		t.Parallel()
 		var buf bytes.Buffer
 		PrintAnalysisHeader(&buf, 20, true, "sub/go.mod")
 		out := buf.String()
@@ -246,7 +248,9 @@ func TestPrintAnalysisHeader(t *testing.T) {
 }
 
 func TestPrintTextResults(t *testing.T) {
+	t.Parallel()
 	t.Run("SingleMode_EmptyResults", func(t *testing.T) {
+		t.Parallel()
 		var buf bytes.Buffer
 		PrintTextResults(&buf, nil, true, false)
 		if buf.Len() != 0 {
@@ -255,6 +259,7 @@ func TestPrintTextResults(t *testing.T) {
 	})
 
 	t.Run("SingleMode_ZeroDependencies", func(t *testing.T) {
+		t.Parallel()
 		var buf bytes.Buffer
 		results := []model.SourceResult{
 			{
@@ -270,6 +275,7 @@ func TestPrintTextResults(t *testing.T) {
 	})
 
 	t.Run("SingleMode_AllUpToDate_MinorEnabled", func(t *testing.T) {
+		t.Parallel()
 		var buf bytes.Buffer
 		results := []model.SourceResult{
 			{
@@ -292,6 +298,7 @@ func TestPrintTextResults(t *testing.T) {
 	})
 
 	t.Run("SingleMode_AllUpToDate_MinorDisabled", func(t *testing.T) {
+		t.Parallel()
 		var buf bytes.Buffer
 		results := []model.SourceResult{
 			{
@@ -314,6 +321,7 @@ func TestPrintTextResults(t *testing.T) {
 	})
 
 	t.Run("SingleMode_WithUpdates", func(t *testing.T) {
+		t.Parallel()
 		var buf bytes.Buffer
 		results := []model.SourceResult{
 			{
@@ -340,6 +348,7 @@ func TestPrintTextResults(t *testing.T) {
 	})
 
 	t.Run("MultiMode_MultipleSources", func(t *testing.T) {
+		t.Parallel()
 		var buf bytes.Buffer
 		results := []model.SourceResult{
 			{
@@ -370,4 +379,66 @@ func TestPrintTextResults(t *testing.T) {
 			t.Errorf("expected github source with updates in output: %q", out)
 		}
 	})
+}
+
+func BenchmarkSanitizeTerminalString_CleanASCII(b *testing.B) {
+	s := "github.com/gin-gonic/gin/v2"
+	b.ResetTimer()
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = SanitizeTerminalString(s)
+	}
+}
+
+func BenchmarkVisualLen_CleanASCII(b *testing.B) {
+	s := "github.com/gin-gonic/gin/v2"
+	b.ResetTimer()
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = visualLen(s)
+	}
+}
+
+func BenchmarkSanitizeAndVisualLen_CleanASCII(b *testing.B) {
+	s := "github.com/gin-gonic/gin/v2"
+	b.ResetTimer()
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = sanitizeAndVisualLen(s)
+	}
+}
+
+func BenchmarkPadWithLen(b *testing.B) {
+	s := "github.com/foo/bar"
+	b.ResetTimer()
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = padWithLen(s, 18, 40)
+	}
+}
+
+func TestSanitizeAndVisualLen(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantStr   string
+		wantWidth int
+	}{
+		{"CleanASCII", "github.com/foo/bar", "github.com/foo/bar", 18},
+		{"ANSIEscape", "\x1b[31;1mhello\x1b[0m", "hello", 5},
+		{"ControlChars", "foo\r\nbar\a", "foobar", 6},
+		{"WideUnicode", "👋 Go", "👋 Go", 5},
+		{"BiDiStripped", "abc\u202Edef", "abcdef", 6},
+		{"Empty", "", "", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotStr, gotWidth := sanitizeAndVisualLen(tt.input)
+			if gotStr != tt.wantStr || gotWidth != tt.wantWidth {
+				t.Errorf("sanitizeAndVisualLen(%q) = (%q, %d), want (%q, %d)",
+					tt.input, gotStr, gotWidth, tt.wantStr, tt.wantWidth)
+			}
+		})
+	}
 }

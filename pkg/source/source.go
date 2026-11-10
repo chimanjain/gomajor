@@ -3,29 +3,25 @@ package source
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
-	"net/url"
 	"os"
-	"regexp"
-	"strings"
 
+	"github.com/chimanjain/gomajor/internal/sanitize"
+	"github.com/chimanjain/gomajor/pkg/config"
+	"github.com/chimanjain/gomajor/pkg/model"
 	"golang.org/x/mod/modfile"
 )
 
+// Type identifies where a go.mod was loaded from.
+type Type = model.SourceType
+
 const (
 	// Local indicates a go.mod loaded from the local filesystem.
-	Local Type = "local"
+	Local = model.Local
 	// GitHub indicates a go.mod fetched from a remote GitHub repository.
-	GitHub Type = "github"
+	GitHub = model.GitHub
 )
-
-var (
-	urlRegex                = regexp.MustCompile(`https?://[^\s"'<>\],]+`)
-	schemelessUserPassRegex = regexp.MustCompile(`(^|[\s"'\(\[])([a-zA-Z0-9_.-]+:[^@\s/]+)@([a-zA-Z0-9_.-]+)`)
-)
-
-// Type identifies where a go.mod was loaded from.
-type Type string
 
 // ParsedSource represents a parsed go.mod file.
 type ParsedSource struct {
@@ -77,12 +73,34 @@ func (p GitHubProvider) Parse(ctx context.Context, httpClient *http.Client) (Par
 	return ParseGithubMod(ctx, httpClient, p.PathOrURL)
 }
 
-// ParseLocalMod reads and parses a local go.mod file.
+// ParseLocalMod reads and parses a local go.mod file, verifying that the target
+// is a regular file and guarding against memory exhaustion and infinite stream hangs.
 func ParseLocalMod(path string) (ParsedSource, error) {
-	content, err := os.ReadFile(path)
+	fi, err := os.Stat(path)
 	if err != nil {
 		return ParsedSource{}, fmt.Errorf("reading file: %w", err)
 	}
+	if !fi.Mode().IsRegular() {
+		return ParsedSource{}, fmt.Errorf("reading file: target is not a regular file: %s", path)
+	}
+	if fi.Size() > config.LocalModMaxBytes {
+		return ParsedSource{}, fmt.Errorf("reading file: file exceeds maximum allowed size (%d bytes): %s", config.LocalModMaxBytes, path)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return ParsedSource{}, fmt.Errorf("reading file: %w", err)
+	}
+	defer f.Close()
+
+	content, err := io.ReadAll(io.LimitReader(f, config.LocalModMaxBytes+1))
+	if err != nil {
+		return ParsedSource{}, fmt.Errorf("reading file: %w", err)
+	}
+	if int64(len(content)) > config.LocalModMaxBytes {
+		return ParsedSource{}, fmt.Errorf("reading file: file exceeds maximum allowed size (%d bytes): %s", config.LocalModMaxBytes, path)
+	}
+
 	return parseModContent(path, Local, content)
 }
 
@@ -95,26 +113,10 @@ func ParseGithubMod(ctx context.Context, httpClient *http.Client, pathOrURL stri
 	return parseModContent(resolvedURL, GitHub, content)
 }
 
-// SanitizeURL strips credentials (usernames, passwords, or tokens) and
-// sensitive query parameters from a URL or text containing URLs.
+// SanitizeURL strips credentials (usernames, passwords, or tokens), sensitive query
+// parameters, and standalone authentication tokens from a URL or text containing URLs/errors.
 func SanitizeURL(raw string) string {
-	if raw == "" {
-		return raw
-	}
-
-	// Fast path: clean single URL with scheme and no spaces or surrounding punctuation
-	if (strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://")) &&
-		!strings.ContainsAny(raw, " \t\n\r\"'[]<>,") {
-		return sanitizeSingleURL(raw)
-	}
-
-	// For general text (error messages, compound strings), find and sanitize all embedded URLs
-	sanitized := urlRegex.ReplaceAllStringFunc(raw, sanitizeSingleURL)
-
-	// Also redact any schemeless credentials: user:pass@host
-	sanitized = schemelessUserPassRegex.ReplaceAllString(sanitized, "${1}redacted@${3}")
-
-	return sanitized
+	return sanitize.SanitizeURL(raw)
 }
 
 // parseModContent parses the module content and extracts required dependencies.
@@ -128,50 +130,4 @@ func parseModContent(sourceName string, sourceType Type, content []byte) (Parsed
 		SourceType: sourceType,
 		Reqs:       modFile.Require,
 	}, nil
-}
-
-// sanitizeSingleURL sanitizes a single parsed HTTP/HTTPS URL.
-func sanitizeSingleURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return raw
-	}
-
-	modified := false
-
-	if u.User != nil {
-		u.User = url.User("redacted")
-		modified = true
-	}
-
-	if u.RawQuery != "" {
-		q := u.Query()
-		for key := range q {
-			if isSensitiveParam(key) {
-				q.Set(key, "REDACTED")
-				modified = true
-			}
-		}
-		if modified {
-			u.RawQuery = q.Encode()
-		}
-	}
-
-	if !modified {
-		return raw
-	}
-	return u.String()
-}
-
-// isSensitiveParam returns true if the query parameter name looks like it
-// could contain a secret value.
-func isSensitiveParam(key string) bool {
-	lower := strings.ToLower(key)
-	switch lower {
-	case "key", "api_key", "apikey", "pat", "pass", "pwd", "bearer", "sig", "signature", "jwt", "session", "sessionid", "hash":
-		return true
-	}
-	return strings.Contains(lower, "token") || strings.Contains(lower, "secret") ||
-		strings.Contains(lower, "password") || strings.Contains(lower, "auth") ||
-		strings.Contains(lower, "credential") || strings.Contains(lower, "private")
 }

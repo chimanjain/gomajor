@@ -27,3 +27,18 @@ minor: true
 # Check for major version upgrades (defaults to true)
 major: true
 
+# Check indirect dependencies too (defaults to false)
+all: false
+
+# Maximum subsequent major versions to probe (defaults to 5, max 50)
+max_probe: 5
+
+# Output in JSON format (defaults to false)
+json: false
+
+# Disable ANSI color formatting (defaults to false)
+no_color: false
+
+# Enable verbose debug logs (defaults to false)
+verbose: false
+

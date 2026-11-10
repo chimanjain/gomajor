@@ -11,16 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chimanjain/gomajor/pkg/constants"
+	"github.com/chimanjain/gomajor/internal/testutil"
+	"github.com/chimanjain/gomajor/pkg/config"
 )
 
 const githubOwnerRepoURL = "https://github.com/owner/repo"
-
-type roundTripFunc func(req *http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
-}
 
 func TestIsTrustedGitHubHost(t *testing.T) {
 	tests := []struct {
@@ -112,6 +107,26 @@ func TestGetGithubRawURLs(t *testing.T) {
 			},
 		},
 		{
+			name:  "untrusted host blocked",
+			input: "http://127.0.0.1:8080/go.mod",
+			want:  nil,
+		},
+		{
+			name:  "attacker host blocked",
+			input: "https://attacker.com/repo",
+			want:  nil,
+		},
+		{
+			name:  "evil github prefix blocked",
+			input: "https://evil-github.com/owner/repo",
+			want:  nil,
+		},
+		{
+			name:  "invalid shorthand",
+			input: "invalid/shorthand/too/many/parts",
+			want:  nil,
+		},
+		{
 			name:  "empty",
 			input: "",
 			want:  nil,
@@ -130,12 +145,13 @@ func TestGetGithubRawURLs(t *testing.T) {
 
 func TestFetchGithubMod(t *testing.T) {
 	tests := []struct {
-		name          string
-		setup         func(t *testing.T) (inputURL string, candidates []string, client *http.Client, cleanup func())
-		wantContent   string
-		wantLen       int
-		wantErr       bool
-		wantURLSuffix string
+		name             string
+		setup            func(t *testing.T) (inputURL string, candidates []string, client *http.Client, cleanup func())
+		wantContent      string
+		wantLen          int
+		wantErr          bool
+		wantURLSuffix    string
+		wantCandidateIdx *int
 	}{
 		{
 			name: "Limit",
@@ -146,9 +162,9 @@ func TestFetchGithubMod(t *testing.T) {
 						_, _ = rw.Write(chunk)
 					}
 				}))
-				return server.URL, nil, server.Client(), server.Close
+				return server.URL, []string{server.URL}, server.Client(), server.Close
 			},
-			wantLen: 5 * constants.MB,
+			wantLen: 5 * config.MB,
 		},
 		{
 			name: "Auth_TokenFromEnv_TrustedHost",
@@ -156,7 +172,7 @@ func TestFetchGithubMod(t *testing.T) {
 				token := "env-token"
 				t.Setenv("GITHUB_TOKEN", token)
 				customClient := &http.Client{
-					Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					Transport: testutil.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
 						if req.Header.Get("Authorization") != "token "+token {
 							return &http.Response{
 								StatusCode: http.StatusUnauthorized,
@@ -186,7 +202,7 @@ func TestFetchGithubMod(t *testing.T) {
 					}
 					_, _ = rw.Write([]byte("untrusted-ok"))
 				}))
-				return server.URL, nil, server.Client(), server.Close
+				return server.URL, []string{server.URL}, server.Client(), server.Close
 			},
 			wantContent: "untrusted-ok",
 		},
@@ -194,7 +210,7 @@ func TestFetchGithubMod(t *testing.T) {
 			name: "Auth_TokenFromURL",
 			setup: func(t *testing.T) (string, []string, *http.Client, func()) {
 				token := "url-token"
-				server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+				server := httptest.NewTLSServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 					if req.Header.Get("Authorization") != "token "+token {
 						rw.WriteHeader(http.StatusUnauthorized)
 						return
@@ -203,9 +219,48 @@ func TestFetchGithubMod(t *testing.T) {
 				}))
 				u, _ := url.Parse(server.URL)
 				u.User = url.UserPassword("", token)
-				return u.String(), nil, server.Client(), server.Close
+				return u.String(), []string{server.URL}, server.Client(), server.Close
 			},
 			wantContent: "url-ok",
+		},
+		{
+			name: "Auth_TokenFromURL_GitHubDomainScoping",
+			setup: func(t *testing.T) (string, []string, *http.Client, func()) {
+				token := "url-token-gh"
+				customClient := &http.Client{
+					Transport: testutil.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+						if req.Header.Get("Authorization") != "token "+token {
+							return &http.Response{
+								StatusCode: http.StatusUnauthorized,
+								Body:       io.NopCloser(strings.NewReader("unauthorized")),
+							}, nil
+						}
+						return &http.Response{
+							StatusCode: http.StatusOK,
+							Body:       io.NopCloser(strings.NewReader("scoped-ok")),
+						}, nil
+					}),
+				}
+				return "https://url-token-gh@github.com/owner/repo", nil, customClient, func() {}
+			},
+			wantContent: "scoped-ok",
+		},
+		{
+			name: "Auth_TokenBlockedOverHTTP",
+			setup: func(t *testing.T) (string, []string, *http.Client, func()) {
+				token := "secret-token"
+				t.Setenv("GITHUB_TOKEN", token)
+				server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+					if req.Header.Get("Authorization") != "" {
+						t.Errorf("Authorization header unexpectedly sent over plaintext HTTP: %s", req.Header.Get("Authorization"))
+						rw.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					_, _ = rw.Write([]byte("plaintext-ok"))
+				}))
+				return server.URL, []string{server.URL}, server.Client(), server.Close
+			},
+			wantContent: "plaintext-ok",
 		},
 		{
 			name: "Retries_TransientThenSuccess",
@@ -219,7 +274,7 @@ func TestFetchGithubMod(t *testing.T) {
 					}
 					_, _ = rw.Write([]byte("retry-ok"))
 				}))
-				return server.URL, nil, server.Client(), server.Close
+				return "mockinput", []string{server.URL}, server.Client(), server.Close
 			},
 			wantContent: "retry-ok",
 		},
@@ -229,7 +284,7 @@ func TestFetchGithubMod(t *testing.T) {
 				server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 					rw.WriteHeader(http.StatusNotFound)
 				}))
-				return server.URL, nil, server.Client(), server.Close
+				return "mockinput", []string{server.URL}, server.Client(), server.Close
 			},
 			wantErr: true,
 		},
@@ -256,6 +311,46 @@ func TestFetchGithubMod(t *testing.T) {
 			},
 			wantContent:   "server1-ok",
 			wantURLSuffix: "/@latest",
+		},
+		{
+			name: "DeterministicPriority_HigherPriorityPreferred",
+			setup: func(t *testing.T) (string, []string, *http.Client, func()) {
+				server1 := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+					time.Sleep(50 * time.Millisecond)
+					rw.WriteHeader(http.StatusOK)
+					_, _ = rw.Write([]byte("main-branch-ok"))
+				}))
+				server2 := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+					// Faster response from lower priority candidate
+					rw.WriteHeader(http.StatusOK)
+					_, _ = rw.Write([]byte("master-branch-ok"))
+				}))
+				cleanup := func() {
+					server1.Close()
+					server2.Close()
+				}
+				return "mockinput", []string{server1.URL, server2.URL}, server1.Client(), cleanup
+			},
+			wantContent: "main-branch-ok",
+		},
+		{
+			name: "DeterministicPriority_FallbackWhenHigherPriorityFails",
+			setup: func(t *testing.T) (string, []string, *http.Client, func()) {
+				server1 := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+					rw.WriteHeader(http.StatusNotFound)
+				}))
+				server2 := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+					rw.WriteHeader(http.StatusOK)
+					_, _ = rw.Write([]byte("master-fallback-ok"))
+				}))
+				cleanup := func() {
+					server1.Close()
+					server2.Close()
+				}
+				return "mockinput", []string{server1.URL, server2.URL}, server1.Client(), cleanup
+			},
+			wantContent:      "master-fallback-ok",
+			wantCandidateIdx: func() *int { i := 1; return &i }(),
 		},
 	}
 
@@ -286,10 +381,43 @@ func TestFetchGithubMod(t *testing.T) {
 			}
 
 			if len(candidates) > 0 {
-				if chosenURL != candidates[0] {
-					t.Errorf("chosenURL = %q, want %q", chosenURL, candidates[0])
+				expectedIdx := 0
+				if tt.wantCandidateIdx != nil {
+					expectedIdx = *tt.wantCandidateIdx
+				}
+				if chosenURL != candidates[expectedIdx] {
+					t.Errorf("chosenURL = %q, want %q", chosenURL, candidates[expectedIdx])
 				}
 			}
 		})
 	}
+}
+
+func TestResolveGithubToken(t *testing.T) {
+	uWithPass, _ := url.Parse("https://user:token-from-url@github.com")
+	if tok := resolveGithubToken(uWithPass); tok != "token-from-url" {
+		t.Errorf("resolveGithubToken with password = %q, want token-from-url", tok)
+	}
+
+	uWithUser, _ := url.Parse("https://user-as-token@github.com")
+	if tok := resolveGithubToken(uWithUser); tok != "user-as-token" {
+		t.Errorf("resolveGithubToken with username = %q, want user-as-token", tok)
+	}
+
+	t.Run("GHTokenEnv", func(t *testing.T) {
+		t.Setenv("GITHUB_TOKEN", "")
+		t.Setenv("GH_TOKEN", "gh-env-token")
+		t.Setenv("GITHUB_PAT", "")
+		if tok := resolveGithubToken(nil); tok != "gh-env-token" {
+			t.Errorf("resolveGithubToken with GH_TOKEN = %q, want gh-env-token", tok)
+		}
+	})
+
+	t.Run("GithubTokenPrecedence", func(t *testing.T) {
+		t.Setenv("GITHUB_TOKEN", "primary-token")
+		t.Setenv("GH_TOKEN", "secondary-token")
+		if tok := resolveGithubToken(nil); tok != "primary-token" {
+			t.Errorf("resolveGithubToken precedence = %q, want primary-token", tok)
+		}
+	})
 }

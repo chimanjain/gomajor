@@ -31,22 +31,14 @@ func TestGet(t *testing.T) {
 			return "", nil
 		}
 
-		// First lookup should call execGoEnv
 		val1 := Get("TEST_UNSET_VAR")
-		if val1 != "from-go-env" {
-			t.Errorf("First Get() = %q, want %q", val1, "from-go-env")
-		}
-		if calls != 1 {
-			t.Errorf("execGoEnv call count = %d, want 1", calls)
+		if val1 != "from-go-env" || calls != 1 {
+			t.Errorf("First Get() = %q (calls=%d), want from-go-env (calls=1)", val1, calls)
 		}
 
-		// Second lookup should use cache
 		val2 := Get("TEST_UNSET_VAR")
-		if val2 != "from-go-env" {
-			t.Errorf("Second Get() = %q, want %q", val2, "from-go-env")
-		}
-		if calls != 1 {
-			t.Errorf("execGoEnv call count after cache hit = %d, want 1", calls)
+		if val2 != "from-go-env" || calls != 1 {
+			t.Errorf("Second Get() = %q (calls=%d), want from-go-env (calls=1)", val2, calls)
 		}
 	})
 
@@ -61,13 +53,13 @@ func TestGet(t *testing.T) {
 
 		val := Get("TEST_ERR_VAR")
 		if val != "" {
-			t.Errorf("Get() on error = %q, want %q", val, "")
+			t.Errorf("Get() on error = %q, want empty", val)
 		}
 	})
 }
 
 func TestIsValidGoEnvKey(t *testing.T) {
-	validKeys := []string{"GOPROXY", "GONOPROXY", "GOPRIVATE", "GITHUB_TOKEN", "FOO_BAR_123"}
+	validKeys := []string{"GOPROXY", "GONOPROXY", "GOPRIVATE", "FOO_BAR_123"}
 	for _, k := range validKeys {
 		if !isValidGoEnvKey(k) {
 			t.Errorf("isValidGoEnvKey(%q) = false, want true", k)
