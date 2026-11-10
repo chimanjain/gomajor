@@ -131,4 +131,3 @@ verbose: true
 		t.Errorf("Verbose = %v, want true", cfg.Verbose)
 	}
 }
-
