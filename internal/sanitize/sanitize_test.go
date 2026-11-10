@@ -56,6 +56,11 @@ func TestURL(t *testing.T) {
 			expected: "error using [REDACTED_TOKEN]",
 		},
 		{
+			name:     "WindowsPathNoCredentials",
+			input:    `C:\Users\admin\go\pkg\mod\github.com\foo@v1.0.0\go.mod`,
+			expected: `C:\Users\admin\go\pkg\mod\github.com\foo@v1.0.0\go.mod`,
+		},
+		{
 			name:     "EmptyString",
 			input:    "",
 			expected: "",
@@ -105,7 +110,7 @@ func TestSingleURL(t *testing.T) {
 	}
 }
 
-func TestSanitizeTerminalString(t *testing.T) {
+func TestTerminalString(t *testing.T) {
 	tests := []struct {
 		name      string
 		input     string
@@ -122,16 +127,16 @@ func TestSanitizeTerminalString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotStr, gotWidth := SanitizeAndVisualLen(tt.input)
+			gotStr, gotWidth := AndVisualLen(tt.input)
 			if gotStr != tt.wantStr {
-				t.Errorf("SanitizeAndVisualLen string = %q, want %q", gotStr, tt.wantStr)
+				t.Errorf("AndVisualLen string = %q, want %q", gotStr, tt.wantStr)
 			}
 			if gotWidth != tt.wantWidth {
-				t.Errorf("SanitizeAndVisualLen width = %d, want %d", gotWidth, tt.wantWidth)
+				t.Errorf("AndVisualLen width = %d, want %d", gotWidth, tt.wantWidth)
 			}
 
-			if got := SanitizeTerminalString(tt.input); got != tt.wantStr {
-				t.Errorf("SanitizeTerminalString = %q, want %q", got, tt.wantStr)
+			if got := TerminalString(tt.input); got != tt.wantStr {
+				t.Errorf("TerminalString = %q, want %q", got, tt.wantStr)
 			}
 			if got := VisualLen(tt.input); got != tt.wantWidth {
 				t.Errorf("VisualLen = %d, want %d", got, tt.wantWidth)
@@ -140,12 +145,12 @@ func TestSanitizeTerminalString(t *testing.T) {
 	}
 }
 
-func BenchmarkSanitizeTerminalString_CleanASCII(b *testing.B) {
+func BenchmarkTerminalString_CleanASCII(b *testing.B) {
 	s := "github.com/gin-gonic/gin/v2"
 	b.ResetTimer()
 	b.ReportAllocs()
 	for b.Loop() {
-		_ = SanitizeTerminalString(s)
+		_ = TerminalString(s)
 	}
 }
 

@@ -57,10 +57,10 @@ func SkipEscapeSeq(s string, i int) int {
 	return i + 1
 }
 
-// SanitizeAndVisualLen strips ANSI escape sequences, ASCII control characters,
+// AndVisualLen strips ANSI escape sequences, ASCII control characters,
 // and Unicode bidirectional / invisible formatting characters, while simultaneously
 // computing the display width in terminal columns in a single pass.
-func SanitizeAndVisualLen(s string) (string, int) {
+func AndVisualLen(s string) (string, int) {
 	if IsCleanASCII(s) {
 		return s, len(s)
 	}
@@ -112,10 +112,10 @@ func SanitizeAndVisualLen(s string) (string, int) {
 	return b.String(), count
 }
 
-// SanitizeTerminalString strips ANSI escape sequences, ASCII control characters,
+// TerminalString strips ANSI escape sequences, ASCII control characters,
 // and Unicode bidirectional / invisible formatting characters to prevent terminal injection.
-func SanitizeTerminalString(s string) string {
-	sanitized, _ := SanitizeAndVisualLen(s)
+func TerminalString(s string) string {
+	sanitized, _ := AndVisualLen(s)
 	return sanitized
 }
 
@@ -123,6 +123,6 @@ func SanitizeTerminalString(s string) string {
 // ANSI escape sequences, BiDi controls, and zero-width characters occupy 0 columns,
 // and East-Asian Wide / Fullwidth characters are counted as 2 columns each.
 func VisualLen(s string) int {
-	_, vlen := SanitizeAndVisualLen(s)
+	_, vlen := AndVisualLen(s)
 	return vlen
 }

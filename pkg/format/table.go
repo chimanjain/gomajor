@@ -14,7 +14,7 @@ import (
 // SanitizeTerminalString strips ANSI escape sequences, ASCII control characters,
 // and Unicode bidirectional / invisible formatting characters to prevent terminal injection.
 func SanitizeTerminalString(s string) string {
-	return sanitize.SanitizeTerminalString(s)
+	return sanitize.TerminalString(s)
 }
 
 // visualLen returns the display width of a string in terminal columns.
@@ -24,7 +24,7 @@ func visualLen(s string) int {
 
 // sanitizeAndVisualLen strips escape sequences and computes display width.
 func sanitizeAndVisualLen(s string) (string, int) {
-	return sanitize.SanitizeAndVisualLen(s)
+	return sanitize.AndVisualLen(s)
 }
 
 const spacePadding = "                                                                                                    " // 100 spaces

@@ -197,10 +197,10 @@ func parseConfig(cmd *cobra.Command) (*config.Config, error) {
 // files do not attempt path traversal or write to arbitrary absolute paths.
 func validateConfigOutputPath(outPath string) error {
 	clean := filepath.Clean(outPath)
-	if filepath.IsAbs(clean) {
+	if filepath.IsAbs(clean) || filepath.VolumeName(clean) != "" || strings.HasPrefix(clean, "/") || strings.HasPrefix(clean, "\\") {
 		return fmt.Errorf("absolute path %q is not allowed in config file; specify a relative path or use the CLI --output flag", outPath)
 	}
-	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "..\\") {
 		return fmt.Errorf("path traversal %q is not allowed in config file; output must reside within the workspace", outPath)
 	}
 	return nil

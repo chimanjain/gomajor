@@ -1,6 +1,13 @@
 .PHONY: all build test coverage clean
 
-BINARY_NAME=gomajor
+ifeq ($(OS),Windows_NT)
+BINARY_NAME ?= gomajor.exe
+# On Windows, -race requires MinGW-w64 gcc and CGO. Omit by default unless overridden.
+RACE_FLAG ?=
+else
+BINARY_NAME ?= gomajor
+RACE_FLAG ?= -race
+endif
 
 all: build test
 
@@ -10,7 +17,7 @@ build:
 
 test:
 	@echo "==> Running tests..."
-	go test -v -race ./...
+	go test -v $(RACE_FLAG) ./...
 
 coverage:
 	@echo "==> Generating test coverage report..."
@@ -21,5 +28,10 @@ coverage:
 clean:
 	@echo "==> Cleaning up..."
 	go clean
+ifeq ($(OS),Windows_NT)
+	-@del /f /q $(BINARY_NAME) 2>nul || rm -f $(BINARY_NAME) 2>/dev/null || true
+	-@del /f /q coverage.out coverage.html 2>nul || rm -f coverage.out coverage.html 2>/dev/null || true
+else
 	rm -f $(BINARY_NAME)
 	rm -f coverage.out coverage.html
+endif

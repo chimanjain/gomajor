@@ -186,7 +186,7 @@ func TestWriteReport_Symlink(t *testing.T) {
 
 	symlinkPath := filepath.Join(tmpDir, "symlink.json")
 	if err := os.Symlink(targetFile, symlinkPath); err != nil {
-		t.Fatalf("failed to create symlink: %v", err)
+		t.Skipf("skipping symlink test; symlink creation not supported: %v", err)
 	}
 
 	err := WriteReport(io.Discard, symlinkPath, true, nil)

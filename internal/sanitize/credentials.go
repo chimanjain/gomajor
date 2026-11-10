@@ -8,7 +8,7 @@ import (
 
 var (
 	urlRegex                = regexp.MustCompile(`https?://[^\s"'<>\],]+`)
-	schemelessUserPassRegex = regexp.MustCompile(`(^|[\s"'\(\[])([a-zA-Z0-9_.-]+:[^@\s/]+)@([a-zA-Z0-9_.-]+)`)
+	schemelessUserPassRegex = regexp.MustCompile(`(^|[\s"'\(\[])([a-zA-Z0-9_.-]+:[^@\s/\\]+)@([a-zA-Z0-9_.-]+)`)
 	standaloneTokenRegex    = regexp.MustCompile(`\b(gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{50,})\b`)
 	authHeaderRegex         = regexp.MustCompile(`(?i)(bearer\s+|token\s+)[A-Za-z0-9_\-\.]{12,}`)
 )

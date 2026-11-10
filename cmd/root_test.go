@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -118,7 +119,7 @@ func TestRootCmd(t *testing.T) {
 		if err := cmd.Execute(); err != nil {
 			t.Fatal(err)
 		}
-		if buf.String() != Version+"\n" {
+		if strings.TrimRight(buf.String(), "\r\n") != Version {
 			t.Errorf("got %q, want %q", buf.String(), Version+"\n")
 		}
 	})
@@ -366,6 +367,19 @@ func TestValidateConfigOutputPath(t *testing.T) {
 		{"ParentTraversal", "../report.json", true},
 		{"DeepTraversal", "a/../../report.json", true},
 		{"DotDotDirect", "..", true},
+	}
+
+	if runtime.GOOS == "windows" {
+		winTests := []struct {
+			name    string
+			path    string
+			wantErr bool
+		}{
+			{"WindowsDriveAbsolute", `C:\report.json`, true},
+			{"WindowsDriveRelative", `C:report.json`, true},
+			{"WindowsRootRelative", `\report.json`, true},
+		}
+		tests = append(tests, winTests...)
 	}
 
 	for _, tt := range tests {
